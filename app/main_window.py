@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import PrimaryPushButton, PushButton
 
 from app.config import APP_TITLE
+from app.data.demo_cases import DEMO_MODULES
 from app.pages.home_page import HomePage
 
 
@@ -45,6 +46,8 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(toolbar)
         central_layout.addWidget(self.pages, 1)
         self.setCentralWidget(central)
+
+        self.home_page.case_tree.load_modules(DEMO_MODULES)
 
         self.btn_import.clicked.connect(self._show_todo)
         self.btn_batch.clicked.connect(self._show_todo)
