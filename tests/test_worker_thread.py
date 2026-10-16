@@ -1,4 +1,4 @@
-"""WorkerThread 5 个信号跨线程收发单元测试。"""
+"""WorkerThread 信号与队列执行集成测试。"""
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -7,12 +7,23 @@ import pytest
 from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtWidgets import QApplication
 
+from app.data.demo_cases import DEMO_MODULES
 from app.engine.worker_thread import WorkerThread
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return QApplication.instance() or QApplication([])
+
+
+class FakeRunner:
+    def __init__(self, ok=True):
+        self.ok = ok
+        self.calls = 0
+
+    def run_step(self, step):
+        self.calls += 1
+        return self.ok
 
 
 class EmittingWorker(WorkerThread):
@@ -56,3 +67,42 @@ def test_signals_declared_on_class(qapp):
     assert WorkerThread.sig_case_status_changed is not None
     assert WorkerThread.sig_log_appended is not None
     assert WorkerThread.sig_batch_finished is not None
+
+
+def test_worker_runs_queued_cases_and_emits_signals(qapp):
+    pairs = [(m, c) for m in DEMO_MODULES for c in m.cases if c.default_checked]
+    statuses, logs, finished = [], [], []
+
+    worker = WorkerThread()
+    worker.set_step_runner(FakeRunner())
+    worker.set_queue(pairs)
+    worker.sig_case_status_changed.connect(lambda *a: statuses.append(a))
+    worker.sig_log_appended.connect(lambda *a: logs.append(a))
+    worker.sig_batch_finished.connect(lambda *a: finished.append(a))
+
+    loop = QEventLoop()
+    worker.finished.connect(loop.quit)
+    QTimer.singleShot(5000, loop.quit)
+    worker.start()
+    loop.exec()
+    assert worker.isFinished(), "worker 未在 5 秒内结束"
+
+    passed = [s for s in statuses if s[1] == "passed"]
+    assert len(passed) == 12
+    suite_logs = [msg for ts, msg in logs if msg.startswith("开始执行测试套件")]
+    assert len(suite_logs) == 3
+    assert finished == [(False,)]
+
+
+def test_worker_without_queue_finishes_immediately(qapp):
+    finished = []
+    worker = WorkerThread()
+    worker.sig_batch_finished.connect(lambda *a: finished.append(a))
+
+    loop = QEventLoop()
+    worker.finished.connect(loop.quit)
+    QTimer.singleShot(5000, loop.quit)
+    worker.start()
+    loop.exec()
+    assert worker.isFinished()
+    assert finished == [(False,)]

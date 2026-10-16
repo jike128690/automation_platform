@@ -98,6 +98,18 @@ class CaseTree(QWidget):
                     result.append(case_item.data(0, Qt.ItemDataRole.UserRole))
         return result
 
+    def selected_pairs(self):
+        """返回按树序的 (TestModule, TestCase) 勾选用例对，供执行队列使用。"""
+        result = []
+        for i in range(self.tree.topLevelItemCount()):
+            module_item = self.tree.topLevelItem(i)
+            module = module_item.data(0, Qt.ItemDataRole.UserRole)
+            for j in range(module_item.childCount()):
+                case_item = module_item.child(j)
+                if case_item.checkState(0) == Qt.CheckState.Checked:
+                    result.append((module, case_item.data(0, Qt.ItemDataRole.UserRole)))
+        return result
+
     def set_locked(self, locked):
         self.tree.setEnabled(not locked)
         self.search_box.setEnabled(not locked)

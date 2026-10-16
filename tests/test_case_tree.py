@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
 from app.data.demo_cases import DEMO_MODULES
-from app.data.models import TestCase as CaseModel
+from app.data.models import TestCase as CaseModel, TestModule as ModuleModel
 from app.widgets.case_tree import CaseTree
 
 
@@ -83,6 +83,14 @@ def test_selected_cases(tree):
     assert all(isinstance(c, CaseModel) for c in selected)
     expected = {"001", "002", "003", "004", "005", "006", "009", "010", "017", "018", "019", "022"}
     assert {c.case_id for c in selected} == expected
+
+
+def test_selected_pairs_group_by_module(tree):
+    pairs = tree.selected_pairs()
+    assert len(pairs) == 12
+    assert all(isinstance(m, ModuleModel) and isinstance(c, CaseModel) for m, c in pairs)
+    module_ids = [m.module_id for m, _ in pairs]
+    assert module_ids == ["M01"] * 6 + ["M02"] * 2 + ["M03"] * 4
 
 
 def test_lock_disables_controls(tree):
