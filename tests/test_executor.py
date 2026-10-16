@@ -178,3 +178,21 @@ def test_session_isolation_cleared_per_case():
     executor = _make_executor(actions)
     _run(executor)
     assert actions.session_clears == 12  # 12 条勾选用例各一次
+
+
+def test_rapid_stop_requests_are_safe():
+    """阶段五极端停止：连点停止（多次 request_stop）幂等安全，不抛异常、正常收尾。"""
+    statuses, finished = [], []
+    holder = {}
+
+    def on_status(cid, st):
+        statuses.append((cid, st))
+        if st == STATUS_RUNNING and cid == CHECKED[0][1].case_id:
+            for _ in range(3):  # 狂点 3 次停止
+                holder["executor"].request_stop()
+
+    executor = _make_executor(FakeAsyncActions(), on_status=on_status, on_finished=finished.append)
+    holder["executor"] = executor
+    passed, failed = _run(executor)
+    assert (passed, failed) == (0, 1)  # 首条用例执行中被停
+    assert finished == [True]

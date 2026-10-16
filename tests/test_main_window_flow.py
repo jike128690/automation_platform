@@ -96,3 +96,30 @@ def test_close_event_stops_running_worker(window):
     window.close()  # 触发 closeEvent：请求停止 + 关闭 Mock 站点（cdp.md 2.4 第二级）
     assert window._worker.stopped
     assert window._mock_site._server is None  # noqa: SLF001
+
+
+def test_close_event_taskkill_when_wait_timeout(window, monkeypatch):
+    """阶段五/T8.2：closeEvent 第三级兜底——wait(2000) 超时后对浏览器进程树执行 taskkill。"""
+    class SlowWorker:
+        def __init__(self):
+            self.pid = 4321
+
+        def isRunning(self):
+            return True
+
+        def request_stop(self):
+            pass
+
+        def wait(self, ms):
+            return False  # 2s 等待超时
+
+        def browser_pid(self):
+            return self.pid
+
+    killed = []
+    monkeypatch.setattr("app.main_window.subprocess.run", lambda cmd, **k: killed.append(cmd))
+    window._worker = SlowWorker()
+    window.close()
+    assert killed  # 超时后执行了 taskkill 兜底
+    assert killed[0][0] == "taskkill"
+    assert "4321" in killed[0]

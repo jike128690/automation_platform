@@ -62,3 +62,11 @@ def test_log_kept_until_clear(panel):
     panel.append_log("10:00:01", "停止后继续追加")
     panel._flush()
     assert "保留日志" in panel.view.toPlainText()  # 停止后保留全部日志（5.1.6）
+
+
+def test_high_frequency_append_no_loss(panel):
+    """阶段五防抖：高频信号风暴下批量追加不丢行（1000 条）。"""
+    for i in range(1000):
+        panel.append_log(f"10:00:0{i % 10}", f"高频日志 {i}")
+    panel._flush()
+    assert panel.view.blockCount() == 1000
