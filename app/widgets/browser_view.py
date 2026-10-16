@@ -27,12 +27,18 @@ def compute_letterbox(canvas_w: int, canvas_h: int,
 
 
 def map_rect(rect: dict, scale: float, offset_x: float, offset_y: float) -> dict:
-    """把视口坐标 BoundingBox 换算为画布坐标（cdp.md 2.2.1 公式）。"""
+    """把视口坐标 BoundingBox 换算为画布坐标（cdp.md 2.2.1 公式）。
+
+    兼容两种字段命名：Playwright bounding_box() 返回 {x,y,width,height}，
+    内部统一输出 {x,y,w,h} 供叠加层绘制（T8.1 联调真机崩溃点）。
+    """
+    width = rect.get("w", rect.get("width", 0))
+    height = rect.get("h", rect.get("height", 0))
     return {
         "x": offset_x + rect["x"] * scale,
         "y": offset_y + rect["y"] * scale,
-        "w": rect["w"] * scale,
-        "h": rect["h"] * scale,
+        "w": width * scale,
+        "h": height * scale,
     }
 
 

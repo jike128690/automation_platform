@@ -49,6 +49,14 @@ def test_map_rect_transform():
     }
 
 
+def test_map_rect_accepts_playwright_fields():
+    # Playwright bounding_box() 字段为 width/height（T8.1 联调真机崩溃点）
+    mapped = map_rect({"x": 8, "y": 72, "width": 177, "height": 21},
+                      scale=0.5, offset_x=0, offset_y=0)
+    assert mapped["w"] == pytest.approx(177 * 0.5)
+    assert mapped["h"] == pytest.approx(21 * 0.5)
+
+
 def test_canvas_keeps_latest_frame(qapp):
     canvas = BrowserCanvas()
     img = QImage(1280, 800, QImage.Format.Format_RGB32)
