@@ -23,6 +23,9 @@ class FakeAsyncActions:
     async def goto(self, url):
         pass
 
+    async def clear_session(self):
+        pass
+
     async def locate(self, selector):
         return {"x": 10, "y": 20, "width": 100, "height": 30}
 

@@ -16,9 +16,13 @@ class FakeAsyncActions:
         self.missing_selectors = set(missing_selectors)
         self.calls = []
         self.count = 0
+        self.session_clears = 0
 
     async def goto(self, url):
         self._touch("goto", url, "")
+
+    async def clear_session(self):
+        self.session_clears += 1
 
     async def locate(self, selector):
         self._touch("locate", selector, "")
@@ -166,3 +170,11 @@ def test_unknown_action_type_fails_case():
     passed, failed = asyncio.run(run_single())
     assert (passed, failed) == (0, 1)
     assert (case.case_id, STATUS_FAILED) in statuses
+
+
+def test_session_isolation_cleared_per_case():
+    """每条用例开始前清一次会话（T8.1 真机联调：登录态跨用例污染导致 002/004/005 失败）。"""
+    actions = FakeAsyncActions()
+    executor = _make_executor(actions)
+    _run(executor)
+    assert actions.session_clears == 12  # 12 条勾选用例各一次

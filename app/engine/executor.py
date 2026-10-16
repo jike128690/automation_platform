@@ -34,6 +34,10 @@ class AsyncPageActions(Protocol):
         """跳转到 URL（wait_until 由实现方配置，默认 domcontentloaded）。"""
         ...
 
+    async def clear_session(self) -> None:
+        """清除页面会话（localStorage/sessionStorage）：每条用例开始前调用，保证用例间状态隔离。"""
+        ...
+
     async def locate(self, selector: str) -> dict | None:
         """滚动进视口并返回元素 BoundingBox（视口坐标 dict）；元素不存在返回 None。"""
         ...
@@ -57,6 +61,13 @@ class AsyncPlaywrightActions:
 
     async def goto(self, url: str):
         await self.page.goto(url, wait_until=self.wait_until)
+
+    async def clear_session(self):
+        try:
+            await self.page.evaluate("localStorage.clear(); sessionStorage.clear();")
+        except Exception:
+            # 首个用例前页面可能为 about:blank（无 origin），清除失败忽略即可
+            pass
 
     async def locate(self, selector: str):
         locator = self.page.locator(selector)
@@ -134,6 +145,9 @@ class AsyncExecutor:
     async def _run_case(self, case) -> bool:
         """执行单条用例的全部步骤（标准节拍），返回该用例是否通过。"""
         self._on_status(case.case_id, STATUS_RUNNING)  # 进入「进行中」
+        # 用例级会话隔离：清掉上一条用例残留的登录态。
+        # 008 会话保持用例需要用例内两次 goto 保留会话，故不放在 goto 里清。
+        await self._actions.clear_session()
         for step in case.steps:
             # 步骤边界停止检查：保证当前动作执行完才安全退出
             if self._stop_requested:
