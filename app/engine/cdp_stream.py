@@ -55,29 +55,7 @@ class CDPStreamClient:
         })
         logger.info(f"CDP 截图流已开启（目标 {int(1 / self.min_frame_interval)} FPS）")
 
-    def _on_screencast_frame(self, params: dict):
-        """CDP 帧到达（同步回调）：先 Ack 保背压，再节流判定，最后解码回传。"""
-        if not self._is_streaming or self.session is None:
-            return
-        session_id = params.get("sessionId")
-        # 1. 立即异步 Ack，不等解码完成，避免浏览器内核阻塞等待
-        if session_id is not None and self._loop is not None:
-            self._loop.create_task(self._ack_frame(session_id))
-
-        # 2. 帧率节流：距上一帧不足最小间隔则整帧丢弃（Drop Frame），不做解码
-        now = time.monotonic()
-        if now - self.last_frame_time < self.min_frame_interval:
-            return
-        self.last_frame_time = now
-
-        # 3. 工作线程内解码：Base64 → JPEG 字节 → QImage（仅 QImage，陷阱一）
-        b64_data = params.get("data", "")
-        if b64_data:
-            raw_bytes = base64.b64decode(b64_data)
-            qimage = QImage.fromData(raw_bytes, "JPEG")
-            if not qimage.isNull():
-                self.on_frame_callback(qimage, self.page.url)
-
+    
     async def _ack_frame(self, session_id):
         """回复 screencastFrameAck，通知内核继续推送下一帧。"""
         try:

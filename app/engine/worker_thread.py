@@ -175,7 +175,10 @@ class WorkerThread(QThread):
         logger.info(f"Headless 浏览器已启动（channel={self._browser_channel or 'chromium'}）")
 
     async def _start_screencast(self):
-        """开启 CDP 截图流，帧回调直接桥接 sig_frame_ready。"""
+        """开启 CDP 截图流，帧回调直接桥接 sig_frame_ready。
+        emit() 是 Qt 信号对象的方法
+        作用是：发射信号，把这个信号和参数通知给所有连接了它的槽函数/回调。
+        """
         self._stream = CDPStreamClient(
             self._page,
             on_frame_callback=lambda qimg, url: self.sig_frame_ready.emit(qimg, url),

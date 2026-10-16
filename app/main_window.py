@@ -89,12 +89,32 @@ class MainWindow(QMainWindow):
         channel, path = self.browser_env or ("chrome", "")
         worker.set_browser(channel=channel, path=path, start_url=f"{MOCK_SITE_URL}/login")
         worker.set_queue(pairs)
+
+        """
+        信号桥接：工作线程 → 主线程（跨线程队列化投递，主线程事件循环中执行）
+        """
+
+        #worker 每拿到一帧画面，就发 sig_frame_ready，触发主界面浏览器视图的 set_frame 更新画面。
         worker.sig_frame_ready.connect(self.home_page.browser_view.set_frame)
+
+        #worker 要高亮某个元素时，触发 set_highlight。
         worker.sig_highlight_element.connect(self.home_page.browser_view.set_highlight)
+
+        #worker 更新用例状态，触发状态面板刷新。
         worker.sig_case_status_changed.connect(self.home_page.status_panel.update_status)
+
+        #worker 产生新日志，触发日志面板追加一行。
         worker.sig_log_appended.connect(self.home_page.log_panel.append_log)
+
+        #worker 整批任务结束，触发当前对象的收尾逻辑。
         worker.sig_batch_finished.connect(self._on_batch_finished)
+
+        #把 worker 保存为实例属性，防止它被 Python 垃圾回收。
         self._worker = worker
+
+        """
+        后台执行线程启动
+        """
         worker.start()
 
     def _on_stop_clicked(self):
