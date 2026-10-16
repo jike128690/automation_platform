@@ -1,7 +1,7 @@
-"""中间画布控件：CDP 帧渲染 + Letterbox 坐标映射 + 高亮叠加层（见 cdp.md 2.2）。"""
+"""中间浏览器视图：信息栏 + BrowserCanvas 画布（截图流渲染 / 坐标映射 / 高亮叠加 / 受控锁定）。"""
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPen
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 VIEWPORT_WIDTH = 1280   # cdp.md 固定视口尺寸（画布缩放与坐标映射的基准）
 VIEWPORT_HEIGHT = 800
@@ -47,13 +47,49 @@ def compute_bubble_pos(rect: dict, bubble_w: int, bubble_h: int,
     return x, y
 
 
+class BrowserInfoBar(QWidget):
+    """顶部信息栏（5.1.4）：🔒 锁图标 + 只读 URL 地址栏 + 刷新按钮 + 受控指示灯。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lock_label = QLabel("🔒", self)
+        self.url_edit = QLineEdit(self)
+        self.url_edit.setReadOnly(True)  # 地址栏始终只读，仅由 worker 帧信号同步
+        self.url_edit.setPlaceholderText("页面地址")
+        self.refresh_btn = QPushButton("刷新", self)
+        self.indicator = QLabel(self)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.lock_label)
+        layout.addWidget(self.url_edit, 1)
+        layout.addWidget(self.refresh_btn)
+        layout.addWidget(self.indicator)
+        self.set_controlled(False)
+
+    def set_url(self, url: str):
+        """同步当前页面 URL（主线程接 sig_frame_ready 调用）。"""
+        self.url_edit.setText(url)
+
+    def set_controlled(self, controlled: bool):
+        """受控状态切换：刷新按钮受控期禁用；指示灯绿点/灰点（开放问题 05 默认方案）。"""
+        self.refresh_btn.setEnabled(not controlled)
+        if controlled:
+            self.indicator.setText("● 自动化受控中")
+            self.indicator.setStyleSheet("color: #2EBD59;")
+        else:
+            self.indicator.setText("● 未运行")
+            self.indicator.setStyleSheet("color: #9E9E9E;")
+
+
 class BrowserCanvas(QWidget):
-    """双图层画布（cdp.md 2.2.2）：Layer0 底色/空闲占位 + Layer1 视频帧 + Layer2 高亮叠加。"""
+    """双图层画布（cdp.md 2.2.2）：Layer0 底色/空闲占位 + Layer1 视频帧 + Layer2 高亮叠加。
+    受控期拦截鼠标/键盘输入，不向后台穿透（5.1.4 受控期锁定）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frame: QImage | None = None   # 最新 CDP 帧（主线程 set_frame 写入）
         self._highlight = None              # {"rect": 视口BBox, "tooltip": str} | None
+        self._controlled = False            # 受控期：吞掉人工输入事件
         self.setMinimumSize(320, 200)
 
     def set_frame(self, qimage: QImage, url: str = ""):
@@ -70,6 +106,10 @@ class BrowserCanvas(QWidget):
         self._highlight = {"rect": dict(rect), "tooltip": tooltip} if rect else None
         self.update()
 
+    def set_controlled(self, controlled: bool):
+        """受控状态切换：受控期拦截一切人工输入，杜绝误触干扰自动化（5.1.4）。"""
+        self._controlled = controlled
+
     def frame_geometry(self):
         """当前画布尺寸下的 Letterbox 参数 (scale, offset_x, offset_y)。"""
         return compute_letterbox(self.width(), self.height())
@@ -78,6 +118,37 @@ class BrowserCanvas(QWidget):
         """基于当前画布几何，把视口坐标换算为画布坐标（高亮/气泡共用）。"""
         scale, offset_x, offset_y = self.frame_geometry()
         return map_rect(rect, scale, offset_x, offset_y)
+
+    # ---- 受控期事件拦截：直接吞掉，不调用默认实现、不穿透给后台浏览器 ----
+    def mousePressEvent(self, event: QMouseEvent):
+        if self._controlled:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._controlled:
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._controlled:
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def wheelEvent(self, event):
+        if self._controlled:
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if self._controlled:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -142,3 +213,32 @@ class BrowserCanvas(QWidget):
             text, Qt.TextElideMode.ElideRight, int(w - 2 * BUBBLE_PADDING))
         painter.drawText(bubble.adjusted(BUBBLE_PADDING, 0, -BUBBLE_PADDING, 0),
                          Qt.AlignmentFlag.AlignVCenter, elided)
+
+
+class BrowserView(QWidget):
+    """浏览器视图整体：顶部信息栏 + 中间画布（5.1.4）。
+
+    统一对外接口，M8 联调时由 MainWindow 把 WorkerThread 信号直接接到本视图：
+      sig_frame_ready → set_frame(QImage, url)；sig_highlight_element → set_highlight(rect, tooltip)；
+      运行/停止 → set_controlled(True/False)。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.info_bar = BrowserInfoBar(self)
+        self.canvas = BrowserCanvas(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.info_bar)
+        layout.addWidget(self.canvas, 1)
+
+    def set_frame(self, qimage: QImage, url: str = ""):
+        self.canvas.set_frame(qimage)
+        self.info_bar.set_url(url)
+
+    def set_highlight(self, rect=None, tooltip: str = ""):
+        self.canvas.set_highlight(rect, tooltip)
+
+    def set_controlled(self, controlled: bool):
+        self.canvas.set_controlled(controlled)
+        self.info_bar.set_controlled(controlled)
