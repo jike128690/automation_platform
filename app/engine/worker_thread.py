@@ -80,6 +80,7 @@ class WorkerThread(QThread):
         self._loop = None
         self._playwright = None
         self._browser = None
+        self._browser_process = None  # 浏览器宿主进程（closeEvent 第三级兜底强杀用）
         self._page = None
         self._stream = None
 
@@ -119,6 +120,11 @@ class WorkerThread(QThread):
     def is_stop_requested(self) -> bool:
         """供异步主流程轮询的停止状态（线程安全读）。"""
         return self._stop_requested
+
+    def browser_pid(self):
+        """当前浏览器宿主进程 PID（无浏览器/已回收返回 None；closeEvent 第三级兜底强杀用）。"""
+        process = self._browser_process
+        return process.pid if process is not None else None
 
     def run(self):
         """线程入口：创建独立 asyncio 事件循环，运行异步主流程，结束后关闭循环。"""
@@ -161,6 +167,7 @@ class WorkerThread(QThread):
         if self._browser_channel:  # chrome / msedge：复用本机内核，降低安装包体积
             kwargs["channel"] = self._browser_channel
         self._browser = await self._playwright.chromium.launch(**kwargs)
+        self._browser_process = getattr(self._browser, "process", None)  # Popen 或 None
         self._page = await self._browser.new_page(viewport={
             "width": self._viewport[0], "height": self._viewport[1],
         })
@@ -211,6 +218,7 @@ class WorkerThread(QThread):
             except Exception:
                 pass
             self._browser = None
+            self._browser_process = None
         if self._playwright is not None:
             try:
                 await self._playwright.stop()
