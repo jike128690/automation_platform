@@ -15,6 +15,8 @@
 import time
 from typing import Protocol
 
+from loguru import logger
+
 from app.data.models import TestStep
 
 # 用例状态常量（与开发计划 6.3 节 sig_case_status_changed 的 status 取值一致）
@@ -83,11 +85,13 @@ class QueueExecutor:
         Returns:
             (通过数, 失败数) 二元组，供右栏统计使用。
         """
+        logger.info(f"开始执行测试批次，共 {len(case_pairs)} 条用例")
         passed = failed = 0
         last_module = None  # 记录上一模块，用于「每个模块只打一次套件开始日志」
         for module, case in case_pairs:
             # 停止检查：手动停止后不再启动新用例，直接收尾
             if self._stop_requested:
+                logger.info("收到手动停止请求，安全退出")
                 self._log("用户手动停止测试，任务已安全终止")
                 break
             # 模块切换时输出套件级日志（对齐 5.1.6 日志格式）
@@ -101,6 +105,7 @@ class QueueExecutor:
                 failed += 1
         # 通知主线程批次结束（True=手动停止，False=全部执行完）
         self._on_finished(self._stop_requested)
+        logger.info(f"测试批次结束：通过 {passed} 条，失败 {failed} 条")
         return passed, failed
 
     def _run_case(self, case) -> bool:
@@ -114,6 +119,7 @@ class QueueExecutor:
                 ok = self._runner.run_step(step)
             except Exception as exc:
                 # 步骤抛异常（如元素定位失败）同样视为用例失败，附异常原因
+                logger.exception(f"用例 {case.case_id} {case.short_name} 步骤执行异常")
                 self._log(f"[{case.case_id}] {case.short_name}: {step.remark}... 失败: {exc}")
                 self._on_status(case.case_id, STATUS_FAILED)
                 return False

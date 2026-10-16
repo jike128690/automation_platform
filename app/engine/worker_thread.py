@@ -15,6 +15,7 @@
   停止：worker.request_stop() —— 线程在下一个步骤边界安全退出。
 """
 from PyQt6.QtCore import QThread, pyqtSignal
+from loguru import logger
 
 from app.engine.executor import QueueExecutor
 
@@ -68,14 +69,17 @@ class WorkerThread(QThread):
         先记下待处理标志，覆盖「栈还没建好就收到停止」的场景；
         若执行器已创建，立即转发停止请求，执行引擎在下一个步骤边界响应。
         """
+        logger.info("收到停止请求")
         self._pending_stop = True
         if self._executor is not None:
             self._executor.request_stop()
 
     def run(self):
         """线程主体：创建执行器，并把回调桥接成 Qt 信号。"""
+        logger.info("工作线程启动")
         # 队列或执行器缺失（如未配置直接 start）时不执行任何任务，直接宣告结束
         if not self._case_pairs or self._runner is None:
+            logger.warning("工作线程启动但队列或执行器未配置")
             self.sig_batch_finished.emit(self._pending_stop)
             return
         # 执行器的工作线程回调 → 信号发射（接收方在主线程，自动队列化投递）
@@ -91,3 +95,4 @@ class WorkerThread(QThread):
             executor.request_stop()
         executor.run(self._case_pairs)
         self._executor = None  # 执行结束，释放引用
+        logger.info("工作线程结束")
