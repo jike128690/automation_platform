@@ -3,7 +3,7 @@
 架构：PyQt6 GUI 事件循环运行在主线程；Playwright 基于 asyncio 实现高并发 CDP 通信，
 因此引擎采用「主线程 Qt 循环 + 工作线程 asyncio 独立循环」双循环隔离架构：
   run() 在工作线程内创建独立 asyncio 事件循环并运行 _async_main()，
-  期间通过 5 个 Qt 信号（QueuedConnection）把帧/状态/日志跨线程投递给主线程，
+  期间通过 5 个 Qt 信号（QueuedConnection）把帧/状态/日志/高亮跨线程投递给主线程，
   避免主线程阻塞，也避免任何跨线程直接操作控件（4.3.2 全异步线程模型）。
 
 信号契约与开发计划 6.3 / cdp.md 3.1 对齐；sig_frame_ready 携带 QImage——
@@ -15,10 +15,10 @@
 
 使用方式（主线程侧）：
   worker = WorkerThread()
-  worker.set_queue(pairs)          # 要执行的 (模块, 用例) 队列（可选）
-  worker.set_step_runner(runner)   # 步骤执行器（可选；阶段四由 Playwright 实现）
+  worker.set_queue(pairs)              # 要执行的 (模块, 用例) 队列（可选）
+  worker.set_actions(actions)          # 页面动作执行器（阶段四 Playwright 实现 / 测试 Fake）
   worker.set_browser("chrome", None, (1280, 800), "http://127.0.0.1:8765")  # 浏览器配置
-  worker.sig_frame_ready.connect(...)   # 按需订阅信号
+  worker.sig_frame_ready.connect(...)  # 按需订阅信号
   worker.start()
   停止：worker.request_stop() —— 异步主流程在检查点安全退出。
 """
@@ -30,7 +30,7 @@ from loguru import logger
 from playwright.async_api import async_playwright
 
 from app.engine.cdp_stream import CDPStreamClient
-from app.engine.executor import QueueExecutor
+from app.engine.executor import AsyncExecutor, AsyncPlaywrightActions
 
 DEFAULT_VIEWPORT = (1280, 800)  # 与 cdp.md 固定视口一致，画布等比缩放的基准
 
@@ -66,7 +66,9 @@ class WorkerThread(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._case_pairs = []          # 待执行队列，set_queue 写入（须在 start() 前设置）
-        self._runner = None            # 步骤执行器（StepRunner 协议）
+        self._actions = None           # 页面动作执行器（AsyncPageActions 协议）
+        self._visual_pause = 0.35      # 高亮观察停顿（cdp.md 2.3，验证脚本可调小提速）
+        self._post_pause = 0.15        # 动作后画面消化等待
         self._stop_requested = False   # 停止标志（布尔原子写：主线程置位、工作线程轮询）
         self._executor = None          # 队列执行期间持有的执行器引用，供 request_stop 转发
         # 浏览器配置（由 env_check 探测结果 + 启动参数组合）
@@ -85,9 +87,14 @@ class WorkerThread(QThread):
         """设置本次要执行的 (TestModule, TestCase) 队列（须在 start() 前调用）。"""
         self._case_pairs = list(case_pairs)
 
-    def set_step_runner(self, runner):
-        """注入步骤执行器（StepRunner 协议，阶段四接入 Playwright 动作实现）。"""
-        self._runner = runner
+    def set_actions(self, actions):
+        """注入页面动作执行器（AsyncPageActions 协议：Playwright 实现或测试 Fake）。"""
+        self._actions = actions
+
+    def set_rhythm(self, visual_pause: float, post_pause: float):
+        """调整标准节拍停顿（秒）：真机演示/验证可调小提速，默认 0.35/0.15。"""
+        self._visual_pause = visual_pause
+        self._post_pause = post_pause
 
     def set_browser(self, channel=None, path=None, viewport=DEFAULT_VIEWPORT, start_url=None):
         """配置浏览器：channel/path 来自 env_check 三级探测；start_url 为要访问的页面。
@@ -126,15 +133,16 @@ class WorkerThread(QThread):
             logger.info("工作线程结束")
 
     async def _async_main(self):
-        """异步主流程：可选启动浏览器/截图流 → 执行队列或演示模式 → 资源回收。"""
+        """异步主流程：可选启动浏览器/截图流 → 异步队列执行或演示模式 → 资源回收。"""
         try:
             if self._start_url:
                 await self._launch_browser()
                 await self._start_screencast()
-            if self._case_pairs and self._runner is not None:
-                # T4.3 同步执行器经线程池运行（阶段四改为异步动作编排），
-                # finished 信号由执行器 on_finished 回调发出
-                await asyncio.to_thread(self._run_queue)
+                # 真实执行路径：动作执行器绑定真实页面
+                self._actions = self._actions or AsyncPlaywrightActions(self._page)
+            if self._case_pairs and self._actions is not None:
+                # 阶段四：AsyncExecutor 异步动作编排（标准节拍 + 高亮信号）
+                await self._run_queue_async()
             elif self._start_url:
                 # 浏览器演示模式：持续推进截图流直到收到停止请求
                 while not self._stop_requested:
@@ -167,20 +175,22 @@ class WorkerThread(QThread):
         )
         await self._stream.start()
 
-    def _run_queue(self):
-        """在 asyncio.to_thread 线程池中运行同步 QueueExecutor（阶段四改异步编排）。"""
-        executor = QueueExecutor(
-            runner=self._runner,
+    async def _run_queue_async(self):
+        """异步队列执行：AsyncExecutor 回调全部桥接为 Qt 信号。"""
+        executor = AsyncExecutor(
+            actions=self._actions,
             on_status=lambda cid, st: self.sig_case_status_changed.emit(cid, st),
             on_log=lambda ts, msg: self.sig_log_appended.emit(ts, msg),
             on_finished=lambda manual: self.sig_batch_finished.emit(manual),
+            on_highlight=lambda rect, tooltip: self.sig_highlight_element.emit(rect, tooltip),
+            visual_pause=self._visual_pause,
+            post_pause=self._post_pause,
         )
         self._executor = executor
         if self._stop_requested:
             executor.request_stop()
-        passed, failed = executor.run(self._case_pairs)
+        await executor.run(self._case_pairs)
         self._executor = None
-        return passed, failed
 
     async def _shutdown_browser(self):
         """第一级资源回收（cdp.md 2.4）：逆序关闭截图流 → 会话 → 页面 → 浏览器 → Playwright。

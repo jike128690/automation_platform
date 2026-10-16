@@ -17,14 +17,23 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-class FakeRunner:
-    def __init__(self, ok=True):
-        self.ok = ok
-        self.calls = 0
+class FakeAsyncActions:
+    """测试专用：全部动作成功，定位恒返回视口坐标。"""
 
-    def run_step(self, step):
-        self.calls += 1
-        return self.ok
+    async def goto(self, url):
+        pass
+
+    async def locate(self, selector):
+        return {"x": 10, "y": 20, "width": 100, "height": 30}
+
+    async def fill(self, selector, value):
+        pass
+
+    async def click(self, selector):
+        pass
+
+    async def assert_visible(self, selector):
+        pass
 
 
 class EmittingWorker(WorkerThread):
@@ -81,7 +90,8 @@ def test_worker_runs_queued_cases_and_emits_signals(qapp):
     statuses, logs, finished = [], [], []
 
     worker = WorkerThread()
-    worker.set_step_runner(FakeRunner())
+    worker.set_actions(FakeAsyncActions())
+    worker.set_rhythm(0, 0)  # 单测提速：跳过视觉停顿
     worker.set_queue(pairs)
     worker.sig_case_status_changed.connect(lambda *a: statuses.append(a))
     worker.sig_log_appended.connect(lambda *a: logs.append(a))
