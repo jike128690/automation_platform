@@ -42,10 +42,21 @@ class CDPStreamClient:
 
     async def start(self):
         """建立页面级 CDP 会话并开启 Screencast。"""
+
+        #拿取当前运行的事件循环loop，确保后续的协程调度在同一个循环中进行
         self._loop = asyncio.get_running_loop()
+
         self.session = await self.page.context.new_cdp_session(self.page)
+
+        """self.session.on("事件名", 回调函数) —— 被动监听（收通知）
+        只要浏览器内核主动推送了名为 Page.screencastFrame（收到新一帧截图）的事件，就自动调用 self._on_screencast_frame 这个函数，并把这帧的数据包作为参数传进去。
+        """
         self.session.on("Page.screencastFrame", self._on_screencast_frame)
         self._is_streaming = True
+
+        """
+        是向浏览器内核主动发送一条指令：“请按照我给的格式（JPEG）、画质（75）、最大尺寸（1280×800）开始录屏推流
+        """
         await self.session.send("Page.startScreencast", {
             "format": SCREENCAST_FORMAT,
             "quality": SCREENCAST_QUALITY,
@@ -55,7 +66,33 @@ class CDPStreamClient:
         })
         logger.info(f"CDP 截图流已开启（目标 {int(1 / self.min_frame_interval)} FPS）")
 
-    
+    def _on_screencast_frame(self, params: dict):
+        """CDP 帧到达（同步回调）：浏览器内核每推来一帧截图就调用这里。
+
+        处理顺序（cdp.md 2.3 背压三步骤）：
+          1) 先 Ack 放行——应答必须尽快发出，否则内核等应答会阻塞渲染管线；
+          2) 帧率节流——两帧间隔不足 1/目标FPS 秒时整帧丢弃（只做时间戳比较，开销极小）；
+          3) 后台解码——Base64 → JPEG 字节 → QImage（陷阱一：仅 QImage，不碰 QPixmap）。
+        """
+        if not self._is_streaming or self.session is None:
+            return
+        session_id = params.get("sessionId")
+        # 1) 立即异步 Ack：把应答协程挂到运行中的事件循环，不等解码完成
+        if session_id is not None and self._loop is not None:
+            self._loop.create_task(self._ack_frame(session_id))
+        # 2) 节流判定：距上一帧不足最小间隔 → 丢弃本帧（不做解码）
+        now = time.monotonic()
+        if now - self.last_frame_time < self.min_frame_interval:
+            return
+        self.last_frame_time = now
+        # 3) 后台解码：Base64 → JPEG 字节 → QImage，解码成功才回传画布
+        b64_data = params.get("data", "")
+        if b64_data:
+            raw_bytes = base64.b64decode(b64_data)
+            qimage = QImage.fromData(raw_bytes, "JPEG")
+            if not qimage.isNull():
+                self.on_frame_callback(qimage, self.page.url)
+
     async def _ack_frame(self, session_id):
         """回复 screencastFrameAck，通知内核继续推送下一帧。"""
         try:

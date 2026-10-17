@@ -146,6 +146,12 @@ class WorkerThread(QThread):
                 await self._start_screencast()
                 # 真实执行路径：动作执行器绑定真实页面
                 self._actions = self._actions or AsyncPlaywrightActions(self._page)
+
+                """
+                如果待执行队列不为空且动作执行器已注入，则进入阶段四的异步队列执行；
+                否则如果 start_url 非 None，则进入浏览器演示模式（持续推进截图流直到收到停止请求）；
+                否则直接宣告批次结束（无队列且无页面）。
+                """
             if self._case_pairs and self._actions is not None:
                 # 阶段四：AsyncExecutor 异步动作编排（标准节拍 + 高亮信号）
                 await self._run_queue_async()

@@ -73,6 +73,10 @@ class AsyncPlaywrightActions:
         locator = self.page.locator(selector)
         try:
             # 陷阱三：长页面元素可能在视口外，必须先滚动进视口再取坐标
+            """
+            scroll_into_view_if_needed(timeout=5000) —— Playwright 内置方法，滚动元素进视口，超时 5 秒抛异常。
+            bounding_box() —— Playwright 内置方法，返回元素的 BoundingBox（视口坐标 dict），若元素不存在/不可定位则返回 None。
+            """
             await locator.scroll_into_view_if_needed(timeout=5000)
             await asyncio.sleep(0.1)  # 等浏览器平滑滚动与新画面帧推送完成
             return await locator.bounding_box()
