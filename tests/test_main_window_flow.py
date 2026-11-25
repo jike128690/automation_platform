@@ -17,9 +17,9 @@ def qapp():
 
 
 @pytest.fixture
-def window(qapp, monkeypatch):
+def window(qapp, monkeypatch, db_engine):
     monkeypatch.setattr("app.main_window.WorkerThread", MagicMock)  # 不启动真浏览器
-    w = MainWindow(("chrome", "C:/fake/chrome.exe"))
+    w = MainWindow(("chrome", "C:/fake/chrome.exe"), db_engine=db_engine)
     yield w
     w.close()
 
@@ -49,7 +49,7 @@ def test_run_flow_locks_and_initializes(window):
     assert not window.btn_import.isEnabled()     # 二级入口置灰（开放问题 03）
     assert window.home_page.case_tree.tree.isEnabled() is False  # 左侧锁定
     assert window.home_page.browser_view.canvas._controlled       # 画布受控
-    assert window.home_page.status_panel.total == 12  # 队列初始化（默认勾选 12）
+    assert window.home_page.status_panel.total == 6  # 队列初始化（真实种子默认勾选 6）
 
 
 def test_run_clears_previous_log(window):

@@ -13,7 +13,10 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import PrimaryPushButton, PushButton
 
 from app.config import APP_TITLE, MOCK_SITE_URL
-from app.data.demo_cases import DEMO_MODULES
+from app.db.engine import engine as default_db_engine
+from app.db.migration import init_db
+from app.db.repositories.case_repo import load_tree
+from app.db.seed import seed_db
 from app.engine.worker_thread import WorkerThread
 from app.pages.home_page import HomePage
 from app.utils.mock_site import MockSite
@@ -22,9 +25,10 @@ EMPTY_QUEUE_MSG = "请至少勾选一条测试用例后再运行"  # 开放问�
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, browser_env=None):
+    def __init__(self, browser_env=None, db_engine=None):
         super().__init__()
         self.browser_env = browser_env
+        self._db_engine = db_engine or default_db_engine  # 测试可注入 tmp 库
         self._worker = None           # 当前执行工作线程（运行中持有）
         self._mock_site = MockSite()  # 内置 Mock 站点：随客户端生命周期启停（T8.1）
         self._mock_site.start()
@@ -57,7 +61,11 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.pages, 1)
         self.setCentralWidget(central)
 
-        self.home_page.case_tree.load_modules(DEMO_MODULES)
+        # 数据库启动期一次性初始化（低配机约束：启动期完成，运行期不查询）：
+        # 迁移（幂等，客户端升级自动补齐）→ 种子（仅空库写入真实业务数据）→ 加载用例树
+        init_db(self._db_engine)
+        seed_db(self._db_engine)
+        self.home_page.case_tree.load_modules(load_tree(self._db_engine))
 
         self.btn_run.clicked.connect(self._on_run_clicked)
         self.btn_stop.clicked.connect(self._on_stop_clicked)
