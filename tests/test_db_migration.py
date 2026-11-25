@@ -43,8 +43,8 @@ def test_load_scripts_sorted_and_validated():
 def test_init_db_creates_version_table_and_runs_scripts(engine):
     applied = init_db(engine)
     assert V001_VERSION in applied
-    assert current_version(engine) == V001_VERSION
-    assert applied_count(engine) == 1
+    assert current_version(engine) == max(s.version for s in load_scripts())
+    assert applied_count(engine) == len(load_scripts())
     assert "tb_schema_migration" in _tables(engine)
 
 
@@ -52,14 +52,16 @@ def test_init_db_idempotent_rerun_noop(engine):
     init_db(engine)
     applied_again = init_db(engine)
     assert applied_again == []            # 幂等：无脚本重复执行
-    assert applied_count(engine) == 1     # 版本记录不重复
+    assert applied_count(engine) == len(load_scripts())  # 版本记录不重复
 
 
 def test_version_table_records_script_name_and_checksum(engine):
     init_db(engine)
     with engine.connect() as c:
         row = c.execute(
-            text("SELECT version, script_name, checksum FROM tb_schema_migration")
+            text("SELECT version, script_name, checksum FROM tb_schema_migration "
+                 "WHERE version = :v"),
+            {"v": V001_VERSION},
         ).fetchone()
     assert row is not None
     version, script_name, checksum = row
@@ -71,36 +73,37 @@ def test_version_table_records_script_name_and_checksum(engine):
 # ---------------------------------------------------------------- 升级重放（新脚本自动执行）
 
 def test_upgrade_replay_applies_new_script_only(engine, monkeypatch, tmp_path):
-    init_db(engine)  # 先到 v001
+    init_db(engine)  # 已应用真实注册表全部脚本
 
-    # 构造假 v002 脚本：用独立模块对象承载，避免 import 缓存污染真实包
+    # 构造假脚本（版本号顺延）：用独立模块对象承载，避免 import 缓存污染真实包
     scripts = load_scripts()
+    real_versions = [s.version for s in scripts]
     v1 = next(s for s in scripts if s.version == V001_VERSION)
 
-    class _FakeV002:
+    class _FakeNext:
         def upgrade(self, conn) -> None:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS tb_tmp_v002 (id INTEGER PRIMARY KEY)"
             )
 
-    fake_v002 = MigrationScript(
-        version=2, name="fake",
-        checksum="a" * 64, upgrade=_FakeV002().upgrade,
+    fake_next = MigrationScript(
+        version=max(real_versions) + 1, name="fake",
+        checksum="a" * 64, upgrade=_FakeNext().upgrade,
     )
-    assert fake_v002.script_name == "v002_fake.py"
+    assert fake_next.script_name == f"v{fake_next.version:03d}_fake.py"
 
     monkeypatch.setattr(
         "app.db.migration.load_scripts",
-        lambda: [v1, fake_v002],
+        lambda: scripts + [fake_next],
     )
 
     applied = init_db(engine)
-    assert applied == [2]
+    assert applied == [fake_next.version]
     assert "tb_tmp_v002" in _tables(engine)
-    assert current_version(engine) == 2
-    assert applied_count(engine) == 2
+    assert current_version(engine) == fake_next.version
+    assert applied_count(engine) == len(scripts) + 1
 
-    # 再次重放（保持 fake 脚本）→ 幂等：v001/v002 均已记录，无新执行
+    # 再次重放（保持 fake 脚本）→ 幂等：全部已记录，无新执行
     assert init_db(engine) == []
 
 
