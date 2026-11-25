@@ -6,6 +6,7 @@
 """
 from app.db.engine import DB_PATH, create_app_engine, engine, SessionLocal, DbSession
 from app.db.migration import current_version, init_db
+from app.db import soft_delete  # noqa: F401  导入即注册软删除全局过滤（T10.4）
 
 __all__ = [
     "DB_PATH", "create_app_engine", "engine", "SessionLocal", "DbSession",

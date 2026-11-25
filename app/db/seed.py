@@ -15,7 +15,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -40,8 +40,11 @@ def seed_db(engine: Engine) -> dict[str, int]:
                   "cases": n, "steps": n, "interfaces": 0}。
     """
     with Session(engine) as session:
-        existing = session.scalar(select(func.count()).select_from(TestModule))
-        if existing:
+        # 原生 SQL 计数：不经过 ORM 软删除过滤（T10.4），语义为"表内是否有任何行"
+        total = session.execute(
+            text("SELECT COUNT(*) FROM tb_test_module")
+        ).scalar()
+        if total:
             return {"seeded": 0}
 
         counts = _insert_seed(session)
