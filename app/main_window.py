@@ -17,6 +17,7 @@ from app.db.engine import engine as default_db_engine
 from app.db.migration import init_db
 from app.db.repositories.case_repo import load_tree
 from app.db.seed import seed_db
+from app.db.services.batch_recorder import BatchRecorder
 from app.engine.worker_thread import WorkerThread
 from app.pages.home_page import HomePage
 from app.utils.mock_site import MockSite
@@ -30,6 +31,7 @@ class MainWindow(QMainWindow):
         self.browser_env = browser_env
         self._db_engine = db_engine or default_db_engine  # 测试可注入 tmp 库
         self._worker = None           # 当前执行工作线程（运行中持有）
+        self._recorder = None         # 当前批次落库器（运行中持有，T11.2-11.4）
         self._mock_site = MockSite()  # 内置 Mock 站点：随客户端生命周期启停（T8.1）
         self._mock_site.start()
         self.setWindowTitle(APP_TITLE)
@@ -98,6 +100,14 @@ class MainWindow(QMainWindow):
         worker.set_browser(channel=channel, path=path, start_url=f"{MOCK_SITE_URL}/login")
         worker.set_queue(pairs)
 
+        # 批次落库（T11.2-11.4）：建批 + 信号直连，回调在 WorkerThread 内写库
+        module_names = ",".join(dict.fromkeys(m.module_name for m, _ in pairs))
+        recorder = BatchRecorder(self._db_engine, module_names=module_names, queue=pairs)
+        worker.sig_case_status_changed.connect(recorder.on_case_status)
+        worker.sig_log_appended.connect(recorder.on_log)
+        worker.sig_batch_finished.connect(recorder.on_batch_finished)
+        self._recorder = recorder
+
         """
         信号桥接：工作线程 → 主线程（跨线程队列化投递，主线程事件循环中执行）
         """
@@ -142,6 +152,7 @@ class MainWindow(QMainWindow):
         self.home_page.case_tree.set_locked(False)
         self.home_page.browser_view.set_controlled(False)
         self._worker = None
+        self._recorder = None  # 落库器随批次结束释放（日志已在 on_batch_finished 冲刷）
         logger.info(f"批次结束（手动停止={manual_stopped}）")
 
     def _set_secondary_enabled(self, enabled):
