@@ -4,3 +4,7 @@ __pycache__/
 log/
 .qwen/
 data/
+# SQLite 库文件与 WAL 附带文件（不入 Git，见数据库开发计划第 8 节）
+*.db
+*.db-wal
+*.db-shm
