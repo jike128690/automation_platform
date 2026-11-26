@@ -36,10 +36,17 @@ class MainWindow(QMainWindow):
         self._db_engine = db_engine or default_db_engine  # 测试可注入 tmp 库
         self._worker = None           # 当前执行工作线程（运行中持有）
         self._recorder = None         # 当前批次落库器（运行中持有，T11.2-11.4）
-        self._mock_site = MockSite()  # 内置 Mock 站点：随客户端生命周期启停（T8.1）
-        self._mock_site.start()
         self.setWindowTitle(APP_TITLE)
         self.resize(1280, 800)
+
+        # 数据库启动期一次性初始化（低配机约束：启动期完成，运行期不查询）：
+        # 迁移（幂等，客户端升级自动补齐）→ 种子（仅空库写入真实业务数据）。
+        # 必须先于任何页面构造：批量配置页 __init__ 即读取 tb_system_config。
+        init_db(self._db_engine)
+        seed_db(self._db_engine)
+
+        self._mock_site = MockSite()  # 内置 Mock 站点：随客户端生命周期启停（T8.1）
+        self._mock_site.start()
 
         self.btn_run = PrimaryPushButton("▷ 运行测试", self)
         self.btn_stop = PushButton("□ 停止测试", self)
@@ -72,11 +79,7 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.pages, 1)
         self.setCentralWidget(central)
 
-        # 数据库启动期一次性初始化（低配机约束：启动期完成，运行期不查询）：
-        # 迁移（幂等，客户端升级自动补齐）→ 种子（仅空库写入真实业务数据）→
-        # 加载用例树 → 媒体过期清理（T13.1，确认项 4，仅清文件不动记录）
-        init_db(self._db_engine)
-        seed_db(self._db_engine)
+        # 库表已就绪，此时才加载用例树与读配置（媒体过期清理 T13.1，仅清文件不动记录）
         self.home_page.case_tree.load_modules(load_tree(self._db_engine))
         try:
             retention = get_config(self._db_engine).media_retention_days

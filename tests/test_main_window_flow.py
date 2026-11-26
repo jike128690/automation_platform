@@ -123,3 +123,26 @@ def test_close_event_taskkill_when_wait_timeout(window, monkeypatch):
     assert killed  # 超时后执行了 taskkill 兜底
     assert killed[0][0] == "taskkill"
     assert "4321" in killed[0]
+
+def test_bootstraps_blank_database_before_pages(qapp, monkeypatch, tmp_path):
+    """启动顺序回归：空白库（未迁移）构造主窗口必须自建表，不得 no such table。
+
+    批量配置页构造即读 tb_system_config，建库/种子必须发生在任何页面构造之前。
+    """
+    from sqlalchemy import text
+
+    from app.db.engine import create_app_engine
+
+    monkeypatch.setattr("app.main_window.WorkerThread", MagicMock)
+    blank = create_app_engine(tmp_path / "blank.db")  # 故意不跑 init_db
+    try:
+        window = MainWindow(("chrome", "C:/fake/chrome.exe"), db_engine=blank)
+        try:
+            with blank.connect() as conn:
+                assert conn.execute(
+                    text("SELECT COUNT(*) FROM tb_system_config")
+                ).scalar_one() >= 1  # 配置表单例已由种子写入
+        finally:
+            window.close()
+    finally:
+        blank.dispose()
