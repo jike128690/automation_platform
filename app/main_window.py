@@ -1,5 +1,6 @@
 """主窗口：三栏布局 + 顶部工具栏 + 页面切换 + 运行/停止联调（T8.1 核心闭环）。"""
 import subprocess
+from pathlib import Path
 
 from loguru import logger
 from PyQt6.QtWidgets import (
@@ -18,7 +19,10 @@ from app.db.migration import init_db
 from app.db.repositories.case_repo import load_tree
 from app.db.seed import seed_db
 from app.db.services.batch_recorder import BatchRecorder
+from app.db.services.config_service import WAIT_UNTIL_MAP, get_config
+from app.db.services.history_service import cleanup_expired_media
 from app.engine.worker_thread import WorkerThread
+from app.pages.batch_config_page import BatchConfigPage
 from app.pages.home_page import HomePage
 from app.utils.mock_site import MockSite
 
@@ -56,6 +60,11 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget(self)
         self.home_page = HomePage(self)
         self.pages.addWidget(self.home_page)
+        self.batch_config_page = BatchConfigPage(self._db_engine, self)
+        self.batch_config_page.sig_back_home.connect(
+            lambda: self.pages.setCurrentWidget(self.home_page)
+        )
+        self.pages.addWidget(self.batch_config_page)
 
         central = QWidget(self)
         central_layout = QVBoxLayout(central)
@@ -64,15 +73,21 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         # 数据库启动期一次性初始化（低配机约束：启动期完成，运行期不查询）：
-        # 迁移（幂等，客户端升级自动补齐）→ 种子（仅空库写入真实业务数据）→ 加载用例树
+        # 迁移（幂等，客户端升级自动补齐）→ 种子（仅空库写入真实业务数据）→
+        # 加载用例树 → 媒体过期清理（T13.1，确认项 4，仅清文件不动记录）
         init_db(self._db_engine)
         seed_db(self._db_engine)
         self.home_page.case_tree.load_modules(load_tree(self._db_engine))
+        try:
+            retention = get_config(self._db_engine).media_retention_days
+            cleanup_expired_media(self._db_engine, retention)
+        except Exception as exc:  # 清理失败不阻断启动
+            logger.warning(f"媒体过期清理失败（忽略）: {exc}")
 
         self.btn_run.clicked.connect(self._on_run_clicked)
         self.btn_stop.clicked.connect(self._on_stop_clicked)
         self.btn_import.clicked.connect(self._show_todo)
-        self.btn_batch.clicked.connect(self._show_todo)
+        self.btn_batch.clicked.connect(self._show_batch_config)
         self.btn_export.clicked.connect(self._show_todo)
 
     # ---- 运行/停止核心控制（5.1.2 状态互斥） ----
@@ -94,18 +109,44 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(True)
         self.btn_stop.setText("□ 停止测试")
         self._set_secondary_enabled(False)
-        # 工作线程全链路：浏览器(Mock 站点) + 队列 + 5 信号直连面板
+        # 工作线程全链路：浏览器 + 队列 + 信号直连面板
+        # T12.3：启动参数来自 tb_system_config（修改配置后重新运行即生效）
+        config = get_config(self._db_engine)
         worker = WorkerThread()
-        channel, path = self.browser_env or ("chrome", "")
+        # 浏览器内核选择（图4）：CHROME → env_check 探测的本机内核；
+        # CHROMIUM → Playwright 内置内核（用户显式选择，覆盖探测结果）
+        if config.browser_type == "CHROME":
+            channel, path = self.browser_env or ("chrome", "")
+        else:
+            channel, path = None, ""
         worker.set_browser(channel=channel, path=path, start_url=f"{MOCK_SITE_URL}/login")
         worker.set_queue(pairs)
+        screenshot_dir, video_dir = self._media_dirs(config)
+        worker.set_runtime_options(
+            start_delay_sec=config.start_delay_sec,
+            wait_until=WAIT_UNTIL_MAP[config.page_load_strategy],
+            implicit_wait_ms=config.implicit_wait_sec * 1000,
+            retry_count=config.retry_count,
+            screenshot_on_fail=bool(config.screenshot_on_fail),
+            screenshot_dir=screenshot_dir,
+            record_video=bool(config.record_video),
+            video_dir=video_dir,
+            clear_cache=bool(config.clear_cache),
+            clear_cookies=bool(config.clear_cookies),
+            clear_history=bool(config.clear_history),
+        )
 
         # 批次落库（T11.2-11.4）：建批 + 信号直连，回调在 WorkerThread 内写库
         module_names = ",".join(dict.fromkeys(m.module_name for m, _ in pairs))
-        recorder = BatchRecorder(self._db_engine, module_names=module_names, queue=pairs)
+        recorder = BatchRecorder(
+            self._db_engine, module_names=module_names, queue=pairs,
+            min_log_level=config.log_level,  # 图4 日志级别：低于阈值不入库
+        )
         worker.sig_case_status_changed.connect(recorder.on_case_status)
         worker.sig_log_appended.connect(recorder.on_log)
         worker.sig_batch_finished.connect(recorder.on_batch_finished)
+        # T12.3 失败自动截图：路径写入 result.screenshot_path
+        worker.sig_media_saved.connect(recorder.update_case_media)
         self._recorder = recorder
 
         """
@@ -161,6 +202,25 @@ class MainWindow(QMainWindow):
 
     def _show_todo(self):
         QMessageBox.information(self, "提示", "功能开发中")
+
+    def _show_batch_config(self):
+        """打开批量配置页（T12.2）：进入时刷新表单为当前配置。"""
+        self.batch_config_page.refresh()
+        self.pages.setCurrentWidget(self.batch_config_page)
+
+    def _media_dirs(self, config):
+        """截图/录像媒体目录：优先配置的报告路径，不可写时回退项目 data/media。"""
+        base = Path(config.report_save_path) if config.report_save_path else None
+        if base is not None:
+            try:
+                (base / "screenshots").mkdir(parents=True, exist_ok=True)
+                (base / "videos").mkdir(parents=True, exist_ok=True)
+                return str(base / "screenshots"), str(base / "videos")
+            except OSError:
+                logger.warning(f"报告路径不可写，媒体目录回退至 data/media: {base}")
+        fallback = Path(__file__).resolve().parent.parent / "data" / "media"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return str(fallback / "screenshots"), str(fallback / "videos")
 
     # ---- 关闭拦截：第二级防僵尸回收（cdp.md 2.4） ----
 

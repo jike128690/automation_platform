@@ -15,6 +15,7 @@
 """
 import asyncio
 import time
+from pathlib import Path
 from typing import Protocol
 
 from loguru import logger
@@ -51,23 +52,60 @@ class AsyncPageActions(Protocol):
     async def assert_visible(self, selector: str) -> None:
         ...
 
+    async def capture_failure_screenshot(self, case_id: str) -> str | None:
+        """用例失败时保存报错截图，返回本地路径；不支持/未启用返回 None（T12.3）。"""
+        ...
+
 
 class AsyncPlaywrightActions:
-    """基于 Playwright 异步 API 的真实动作实现（cdp.md 2.3 / 陷阱三）。"""
+    """基于 Playwright 异步 API 的真实动作实现（cdp.md 2.3 / 陷阱三）。
 
-    def __init__(self, page, wait_until: str = "domcontentloaded"):
+    T12.3 配置联动：
+    - wait_until 由页面加载策略映射（NORMAL→load / EAGER→domcontentloaded / NONE→commit）；
+    - implicit_wait_sec → page.set_default_timeout（Playwright 原生自动等待的最近似对应）；
+    - clear_cookies/clear_history/clear_cache 按【批量配置】开关在用例开始前清理；
+    - screenshot_on_fail 启用时 capture_failure_screenshot 保存报错截图。
+    """
+
+    def __init__(self, page, wait_until: str = "domcontentloaded",
+                 implicit_wait_ms: int | None = None,
+                 clear_cookies: bool = False, clear_history: bool = False,
+                 clear_cache: bool = False,
+                 screenshot_dir: str | None = None,
+                 screenshot_on_fail: bool = False):
         self.page = page
-        self.wait_until = wait_until  # 页面加载策略（阶段二配置项，当前默认 domcontentloaded）
+        self.wait_until = wait_until
+        self._clear_cookies = clear_cookies
+        self._clear_history = clear_history
+        self._clear_cache = clear_cache
+        self._screenshot_dir = screenshot_dir
+        self._screenshot_on_fail = screenshot_on_fail
+        if implicit_wait_ms is not None:
+            # 元素查找等待 (Implicit Wait)：Playwright 以默认超时近似对应（图4）
+            page.set_default_timeout(implicit_wait_ms)
 
     async def goto(self, url: str):
         await self.page.goto(url, wait_until=self.wait_until)
 
     async def clear_session(self):
-        try:
-            await self.page.evaluate("localStorage.clear(); sessionStorage.clear();")
-        except Exception:
-            # 首个用例前页面可能为 about:blank（无 origin），清除失败忽略即可
-            pass
+        """按批量配置的清除数据项开关逐项清理（失败忽略，不阻断用例）。"""
+        if self._clear_history:
+            try:
+                await self.page.evaluate("localStorage.clear(); sessionStorage.clear();")
+            except Exception:
+                pass  # 首个用例前页面可能为 about:blank（无 origin），清除失败忽略即可
+        if self._clear_cache:
+            try:
+                cdp = await self.page.context.new_cdp_session(self.page)
+                await cdp.send("Network.clearBrowserCache")
+                await cdp.detach()
+            except Exception:
+                pass  # CDP 会话不可用时忽略（浏览器缓存非关键状态）
+        if self._clear_cookies:
+            try:
+                await self.page.context.clear_cookies()
+            except Exception:
+                pass
 
     async def locate(self, selector: str):
         locator = self.page.locator(selector)
@@ -92,12 +130,26 @@ class AsyncPlaywrightActions:
     async def assert_visible(self, selector: str):
         await expect(self.page.locator(selector)).to_be_visible()
 
+    async def capture_failure_screenshot(self, case_id: str) -> str | None:
+        """用例失败保存报错截图（配置 screenshot_on_fail 启用），返回路径或 None。"""
+        if not self._screenshot_on_fail or not self._screenshot_dir:
+            return None
+        try:
+            save_dir = Path(self._screenshot_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            path = save_dir / f"{case_id}_{int(time.time() * 1000)}.png"
+            await self.page.screenshot(path=str(path), full_page=True)
+            return str(path)
+        except Exception:
+            return None  # 截图失败不掩盖原始失败原因
+
 
 class AsyncExecutor:
     """异步用例队列引擎：标准节拍 + 状态机 + 失败续跑 + 安全停止。"""
 
     def __init__(self, actions, on_status=None, on_log=None, on_finished=None,
-                 on_highlight=None, visual_pause: float = 0.35, post_pause: float = 0.15):
+                 on_highlight=None, on_media=None, visual_pause: float = 0.35,
+                 post_pause: float = 0.15, retry_count: int = 0):
         """
         Args:
             actions: 实现 AsyncPageActions 协议的对象（Playwright 实现或测试 Fake）。
@@ -105,16 +157,20 @@ class AsyncExecutor:
             on_log: 日志回调 (timestamp, message)。
             on_finished: 批次结束回调 (is_manual_stopped)。
             on_highlight: 高亮回调 (rect|None, tooltip)——WorkerThread 桥接 sig_highlight_element。
+            on_media: 报错截图回调 (case_id, screenshot_path)——T12.3 失败自动截图落库。
             visual_pause: 高亮后的人眼观察停顿秒数（cdp.md 2.3，测试可置 0）。
             post_pause: 动作成功后等待新画面帧推送的秒数。
+            retry_count: 失败重试次数（T12.3，配置表 retry_count；0=不重试）。
         """
         self._actions = actions
         self._on_status = on_status or (lambda cid, st: None)
         self._on_log = on_log or (lambda ts, msg: None)
         self._on_finished = on_finished or (lambda manual: None)
         self._on_highlight = on_highlight or (lambda rect, tooltip: None)
+        self._on_media = on_media
         self._visual_pause = visual_pause
         self._post_pause = post_pause
+        self._retry_count = max(0, int(retry_count))
         self._stop_requested = False
 
     def request_stop(self):
@@ -136,8 +192,14 @@ class AsyncExecutor:
             if module is not last_module:
                 self._log(f"开始执行测试套件: {module.module_name}")
                 last_module = module
-            # 单条失败不中断批次：无论成败都继续下一条
-            if await self._run_case(case):
+            # 单条失败不中断批次：无论成败都继续下一条（含失败重试，T12.3）
+            ok = await self._run_case(case)
+            attempt = 0
+            while not ok and attempt < self._retry_count and not self._stop_requested:
+                attempt += 1
+                self._log(f"[{case.case_id}] {case.short_name}: 第 {attempt}/{self._retry_count} 次失败重试...")
+                ok = await self._run_case(case)  # 重跑重新进入 RUNNING 态
+            if ok:
                 passed += 1
             else:
                 failed += 1
@@ -165,6 +227,8 @@ class AsyncExecutor:
                 logger.exception(f"用例 {case.case_id} {case.short_name} 步骤执行异常")
                 self._on_highlight({}, "")  # 异常路径同样清除画布叠加层（空 dict=清除）
                 self._log(f"[{case.case_id}] {case.short_name}: {step.remark}... 失败: {exc}")
+                # T12.3 失败自动截图：路径经 on_media 回调落库（screenshot_path）
+                await self._capture_failure_media(case.case_id)
                 self._on_status(case.case_id, STATUS_FAILED)
                 return False
             # Post-Step：成功日志 + 短暂等待让新页面帧推送到画布（高亮清除在 _run_step 内完成）
@@ -202,6 +266,18 @@ class AsyncExecutor:
             raise ValueError(f"未知动作类型: {step.action_type}")
         # 5) 动作完成：清除高亮（空 dict=清除，cdp.md 2.3；设置/清除成对收敛在本方法，goto 步骤无高亮信号）
         self._on_highlight({}, "")
+
+    async def _capture_failure_media(self, case_id: str):
+        """失败自动截图（T12.3）：协议方法缺失或未启用时静默跳过。"""
+        capture = getattr(self._actions, "capture_failure_screenshot", None)
+        if capture is None or self._on_media is None:
+            return
+        try:
+            path = await capture(case_id)
+            if path:
+                self._on_media(case_id, path)
+        except Exception as exc:
+            logger.warning(f"失败截图保存异常（忽略）: {exc}")
 
     def _log(self, message):
         """按 5.1.6 格式上报日志：时间戳与消息分开传，由面板统一渲染 [HH:mm:ss]。"""

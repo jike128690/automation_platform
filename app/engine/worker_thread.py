@@ -23,6 +23,7 @@
   停止：worker.request_stop() —— 异步主流程在检查点安全退出。
 """
 import asyncio
+from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
@@ -63,6 +64,10 @@ class WorkerThread(QThread):
     # 主线程处理：关闭指示灯、解锁左侧控件、保留进度与日志（M6）
     sig_batch_finished = pyqtSignal(bool)
 
+    # 失败自动截图已保存：case_id + 本地路径（T12.3，screenshot_on_fail 启用时）
+    # 主线程处理：桥接 BatchRecorder.update_case_media 写入 screenshot_path
+    sig_media_saved = pyqtSignal(str, str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._case_pairs = []          # 待执行队列，set_queue 写入（须在 start() 前设置）
@@ -83,6 +88,18 @@ class WorkerThread(QThread):
         self._browser_process = None  # 浏览器宿主进程（closeEvent 第三级兜底强杀用）
         self._page = None
         self._stream = None
+        # 批量配置运行时选项（set_runtime_options 注入，默认值 = 无联动）
+        self._start_delay_sec = 0
+        self._wait_until = "domcontentloaded"
+        self._implicit_wait_ms = None
+        self._retry_count = 0
+        self._screenshot_on_fail = False
+        self._screenshot_dir = None
+        self._record_video = False
+        self._video_dir = None
+        self._clear_cache = False
+        self._clear_cookies = False
+        self._clear_history = False
 
     def set_queue(self, case_pairs):
         """设置本次要执行的 (TestModule, TestCase) 队列（须在 start() 前调用）。"""
@@ -105,6 +122,34 @@ class WorkerThread(QThread):
         self._browser_path = path
         self._viewport = viewport
         self._start_url = start_url
+
+    def set_runtime_options(self, start_delay_sec: int = 0,
+                            wait_until: str = "domcontentloaded",
+                            implicit_wait_ms: int | None = None,
+                            retry_count: int = 0,
+                            screenshot_on_fail: bool = False,
+                            screenshot_dir: str | None = None,
+                            record_video: bool = False,
+                            video_dir: str | None = None,
+                            clear_cache: bool = False,
+                            clear_cookies: bool = False,
+                            clear_history: bool = False):
+        """注入批量配置运行时选项（T12.3：启动参数来自 tb_system_config）。
+
+        每次点击【运行测试】由主线程读取配置后调用 —— 修改配置后重新运行
+        即生效（运行中的批次不受影响）。
+        """
+        self._start_delay_sec = max(0, int(start_delay_sec))
+        self._wait_until = wait_until
+        self._implicit_wait_ms = implicit_wait_ms
+        self._retry_count = retry_count
+        self._screenshot_on_fail = screenshot_on_fail
+        self._screenshot_dir = screenshot_dir
+        self._record_video = record_video
+        self._video_dir = video_dir
+        self._clear_cache = clear_cache
+        self._clear_cookies = clear_cookies
+        self._clear_history = clear_history
 
     def request_stop(self):
         """请求安全停止（主线程调用）。
@@ -144,14 +189,21 @@ class WorkerThread(QThread):
             if self._start_url:
                 await self._launch_browser()
                 await self._start_screencast()
-                # 真实执行路径：动作执行器绑定真实页面
-                self._actions = self._actions or AsyncPlaywrightActions(self._page)
+                # 真实执行路径：动作执行器绑定真实页面（T12.3：注入批量配置选项）
+                self._actions = self._actions or AsyncPlaywrightActions(
+                    self._page,
+                    wait_until=self._wait_until,
+                    implicit_wait_ms=self._implicit_wait_ms,
+                    clear_cache=self._clear_cache,
+                    clear_cookies=self._clear_cookies,
+                    clear_history=self._clear_history,
+                    screenshot_dir=self._screenshot_dir,
+                    screenshot_on_fail=self._screenshot_on_fail,
+                )
 
-                """
-                如果待执行队列不为空且动作执行器已注入，则进入阶段四的异步队列执行；
-                否则如果 start_url 非 None，则进入浏览器演示模式（持续推进截图流直到收到停止请求）；
-                否则直接宣告批次结束（无队列且无页面）。
-                """
+            # 队列非空且动作执行器已注入 → 异步队列执行；
+            # 否则 start_url 非 None → 浏览器演示模式（持续推进截图流直到停止）；
+            # 否则直接宣告批次结束（无队列且无页面）。
             if self._case_pairs and self._actions is not None:
                 # 阶段四：AsyncExecutor 异步动作编排（标准节拍 + 高亮信号）
                 await self._run_queue_async()
@@ -172,12 +224,17 @@ class WorkerThread(QThread):
         kwargs = {"headless": True}
         if self._browser_channel:  # chrome / msedge：复用本机内核，降低安装包体积
             kwargs["channel"] = self._browser_channel
+        if self._record_video and self._video_dir:  # T12.3：录制执行过程（配置开关）
+            Path(self._video_dir).mkdir(parents=True, exist_ok=True)
+            kwargs["record_video_dir"] = self._video_dir
+            kwargs["record_video_size"] = {"width": self._viewport[0],
+                                           "height": self._viewport[1]}
         self._browser = await self._playwright.chromium.launch(**kwargs)
         self._browser_process = getattr(self._browser, "process", None)  # Popen 或 None
         self._page = await self._browser.new_page(viewport={
             "width": self._viewport[0], "height": self._viewport[1],
         })
-        await self._page.goto(self._start_url, wait_until="domcontentloaded")
+        await self._page.goto(self._start_url, wait_until=self._wait_until)
         logger.info(f"Headless 浏览器已启动（channel={self._browser_channel or 'chromium'}）")
 
     async def _start_screencast(self):
@@ -193,14 +250,20 @@ class WorkerThread(QThread):
 
     async def _run_queue_async(self):
         """异步队列执行：AsyncExecutor 回调全部桥接为 Qt 信号。"""
+        if self._start_delay_sec > 0:  # T12.3：测试启动前延迟（图3 配置）
+            logger.info(f"启动前延迟 {self._start_delay_sec}s（批量配置）")
+            await asyncio.sleep(self._start_delay_sec)
+
         executor = AsyncExecutor(
             actions=self._actions,
             on_status=lambda cid, st: self.sig_case_status_changed.emit(cid, st),
             on_log=lambda ts, msg: self.sig_log_appended.emit(ts, msg),
             on_finished=lambda manual: self.sig_batch_finished.emit(manual),
             on_highlight=lambda rect, tooltip: self.sig_highlight_element.emit(rect, tooltip),
+            on_media=lambda cid, path: self.sig_media_saved.emit(cid, path),
             visual_pause=self._visual_pause,
             post_pause=self._post_pause,
+            retry_count=self._retry_count,
         )
         self._executor = executor
         if self._stop_requested:

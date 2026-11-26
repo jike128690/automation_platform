@@ -48,6 +48,9 @@ _STATUS_MAP = {
 
 _STOP_ERROR_MESSAGE = "批次被手动停止，用例未执行完即中断"
 
+# 日志级别阈值（图4 日志级别配置）：低于阈值不入库（T12.3）
+_LEVEL_RANK = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3}
+
 
 def next_batch_no(engine) -> str:
     """生成下一个批次号 #YYYYMMDD-NN（自然日自增，LDM 2.7）。"""
@@ -65,7 +68,8 @@ class BatchRecorder:
     """单次【运行测试】的落库生命周期：建批 → 结果/日志写入 → 统计回填。"""
 
     def __init__(self, engine, module_names: str, queue: list[tuple],
-                 log_flush_size: int = 50, log_flush_interval: float = 1.0):
+                 log_flush_size: int = 50, log_flush_interval: float = 1.0,
+                 min_log_level: str = "INFO"):
         """
         Args:
             engine: SQLAlchemy 引擎（测试注入 tmp 库，生产为全局引擎）。
@@ -74,16 +78,19 @@ class BatchRecorder:
                    DTO case_id 即 case_code（case_repo.load_tree 映射约定）。
             log_flush_size: 日志缓冲条数阈值。
             log_flush_interval: 日志冲刷时间阈值（秒）。
+            min_log_level: 最低入库日志级别（图4 配置；低于阈值丢弃）。
         """
         self.engine = engine
         self._t0 = time.monotonic()
         self._log_flush_size = log_flush_size
         self._log_flush_interval = log_flush_interval
+        self._min_level_rank = _LEVEL_RANK.get(min_log_level, 1)
 
         self._queue_codes = [case.case_id for _, case in queue]
         self._result_ids: dict[str, str] = {}    # case_code → result UUID
         self._status: dict[str, str] = {}        # case_code → exec_status 值
         self._started_at: dict[str, float] = {}  # case_code → 单调时钟起点
+        self._retry_counts: dict[str, int] = {}  # case_code → 实际重试次数（LDM 2.8）
         self._log_buffer: list[tuple[int, str, str, str]] = []  # (seq, level, time, content)
         self._seq_no = 0
         self._last_flush = time.monotonic()
@@ -134,6 +141,11 @@ class BatchRecorder:
 
         if exec_status == ExecStatus.RUNNING:
             self._started_at[case_id] = time.monotonic()
+            # 终态后再次进入 RUNNING = 引擎失败重试（T12.3 retry_count 落库）
+            if self._status.get(case_id) in (
+                ExecStatus.PASSED.value, ExecStatus.FAILED.value,
+            ):
+                self._retry_counts[case_id] = self._retry_counts.get(case_id, 0) + 1
 
         duration: int | None = None
         if exec_status in (ExecStatus.PASSED, ExecStatus.FAILED):
@@ -150,6 +162,7 @@ class BatchRecorder:
                 result.start_time = now_iso()  # 用例开始执行时间（LDM 2.8）
             if duration is not None:
                 result.duration_sec = duration
+            result.retry_count = self._retry_counts.get(case_id, 0)
             if exec_status == ExecStatus.FAILED:
                 result.error_message = self._extract_error(case_id)
             if exec_status in (ExecStatus.PASSED, ExecStatus.FAILED):
@@ -198,9 +211,11 @@ class BatchRecorder:
     # ---------------------------------------------------------- T11.4 日志批量落库
 
     def on_log(self, timestamp: str, message: str):
-        """信号槽：流水日志先入缓冲，按 50 条 / 1s 阈值批量落库。"""
-        self._seq_no += 1
+        """信号槽：流水日志先入缓冲（低于配置级别丢弃），按 50 条 / 1s 阈值批量落库。"""
         level = LogLevel.ERROR.value if "失败" in message else LogLevel.INFO.value
+        if _LEVEL_RANK.get(level, 1) < self._min_level_rank:
+            return  # 低于日志级别配置（图4）：不入库
+        self._seq_no += 1
         self._log_buffer.append((self._seq_no, level, timestamp, message))
         now = time.monotonic()
         if (len(self._log_buffer) >= self._log_flush_size
