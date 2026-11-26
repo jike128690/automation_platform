@@ -45,7 +45,10 @@ def _mk_case(db) -> TestCase:
 # ---------------------------------------------------------------- 建表
 
 def test_runtime_tables_created(db):
-    assert current_version(db) == 2
+    # 迁移链随新脚本演进（v003 配置表等）：断言"已到注册表最新版本"而非固定数字
+    from app.db.migration import load_scripts
+    assert current_version(db) == max(s.version for s in load_scripts())
+    assert current_version(db) >= 2  # v002 执行域脚本已应用
     with db.connect() as c:
         tables = {r[0] for r in c.exec_driver_sql(
             "SELECT name FROM sqlite_master WHERE type='table'"
