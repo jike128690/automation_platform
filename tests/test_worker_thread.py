@@ -1,4 +1,5 @@
 """WorkerThread 信号与队列执行集成测试（asyncio 双事件循环架构）。"""
+import asyncio
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -8,6 +9,7 @@ from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import QApplication
 
+import app.engine.worker_thread as worker_module
 from app.data.demo_cases import DEMO_MODULES
 from app.engine.worker_thread import WorkerThread
 
@@ -106,6 +108,88 @@ def test_worker_runs_queued_cases_and_emits_signals(qapp):
     suite_logs = [msg for ts, msg in logs if msg.startswith("开始执行测试套件")]
     assert len(suite_logs) == 3
     assert finished == [(False,)]
+
+
+class FakePage:
+    def __init__(self):
+        self.goto_args = None
+
+    async def goto(self, url, wait_until=None):
+        self.goto_args = (url, wait_until)
+
+
+class FakeBrowser:
+    process = None
+
+    def __init__(self):
+        self.launch_kwargs = None
+        self.page_kwargs = None
+        self.page = FakePage()
+
+    async def new_page(self, **kwargs):
+        self.page_kwargs = kwargs
+        return self.page
+
+
+class FakeChromium:
+    def __init__(self):
+        self.launch_kwargs = None
+        self.browser = FakeBrowser()
+
+    async def launch(self, **kwargs):
+        self.launch_kwargs = kwargs
+        return self.browser
+
+
+class FakePlaywright:
+    def __init__(self):
+        self.chromium = FakeChromium()
+
+    async def stop(self):
+        pass
+
+
+class FakeStarter:
+    def __init__(self):
+        self.playwright = FakePlaywright()
+
+    async def start(self):
+        return self.playwright
+
+
+def test_record_video_options_passed_to_page_context(qapp, monkeypatch, tmp_path):
+    """record_video_* 属于上下文参数：随 new_page 传入，launch 只收启动参数。"""
+    starter = FakeStarter()
+    monkeypatch.setattr(worker_module, "async_playwright", lambda: starter)
+    video_dir = tmp_path / "videos"
+
+    worker = WorkerThread()
+    worker.set_browser("chrome", None, (1280, 800), "http://127.0.0.1:8765/login")
+    worker.set_runtime_options(record_video=True, video_dir=str(video_dir))
+    asyncio.run(worker._launch_browser())
+
+    browser = starter.playwright.chromium.browser
+    assert starter.playwright.chromium.launch_kwargs == {"headless": True, "channel": "chrome"}
+    assert browser.page_kwargs == {
+        "viewport": {"width": 1280, "height": 800},
+        "record_video_dir": str(video_dir),
+        "record_video_size": {"width": 1280, "height": 800},
+    }
+    assert video_dir.is_dir()
+    assert browser.page.goto_args == ("http://127.0.0.1:8765/login", "domcontentloaded")
+
+
+def test_record_video_disabled_keeps_page_options_clean(qapp, monkeypatch):
+    starter = FakeStarter()
+    monkeypatch.setattr(worker_module, "async_playwright", lambda: starter)
+
+    worker = WorkerThread()
+    worker.set_browser(None, None, (1280, 800), "http://127.0.0.1:8765/login")
+    asyncio.run(worker._launch_browser())
+
+    browser = starter.playwright.chromium.browser
+    assert starter.playwright.chromium.launch_kwargs == {"headless": True}
+    assert browser.page_kwargs == {"viewport": {"width": 1280, "height": 800}}
 
 
 def test_worker_without_queue_finishes_immediately(qapp):

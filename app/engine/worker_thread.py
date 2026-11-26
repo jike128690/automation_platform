@@ -1,4 +1,4 @@
-"""QThread 工作线程：Qt 主线程 + asyncio 工作循环的双事件循环桥接（见 cdp.md 1.1）。
+"""QThread 工作线程：Qt 主线程 + asyncio 工作循环的双事件循环桥接。
 
 架构：PyQt6 GUI 事件循环运行在主线程；Playwright 基于 asyncio 实现高并发 CDP 通信，
 因此引擎采用「主线程 Qt 循环 + 工作线程 asyncio 独立循环」双循环隔离架构：
@@ -224,16 +224,16 @@ class WorkerThread(QThread):
         kwargs = {"headless": True}
         if self._browser_channel:  # chrome / msedge：复用本机内核，降低安装包体积
             kwargs["channel"] = self._browser_channel
-        if self._record_video and self._video_dir:  # T12.3：录制执行过程（配置开关）
-            Path(self._video_dir).mkdir(parents=True, exist_ok=True)
-            kwargs["record_video_dir"] = self._video_dir
-            kwargs["record_video_size"] = {"width": self._viewport[0],
-                                           "height": self._viewport[1]}
         self._browser = await self._playwright.chromium.launch(**kwargs)
         self._browser_process = getattr(self._browser, "process", None)  # Popen 或 None
-        self._page = await self._browser.new_page(viewport={
-            "width": self._viewport[0], "height": self._viewport[1],
-        })
+        page_kwargs = {"viewport": {"width": self._viewport[0], "height": self._viewport[1]}}
+        if self._record_video and self._video_dir:  # T12.3：录制执行过程（配置开关）
+            # 录制参数属于浏览器上下文，只能随 new_page 传入（launch 不接受）
+            Path(self._video_dir).mkdir(parents=True, exist_ok=True)
+            page_kwargs["record_video_dir"] = self._video_dir
+            page_kwargs["record_video_size"] = {"width": self._viewport[0],
+                                                "height": self._viewport[1]}
+        self._page = await self._browser.new_page(**page_kwargs)
         await self._page.goto(self._start_url, wait_until=self._wait_until)
         logger.info(f"Headless 浏览器已启动（channel={self._browser_channel or 'chromium'}）")
 
