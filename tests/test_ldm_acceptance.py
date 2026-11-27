@@ -219,7 +219,7 @@ def test_framework_run_persist_restart_queryable(db, tmp_path):
         )).scalar_one() == 6
         # 日志行数 = 套件日志（每模块 1 条）+ 每步骤 2 行（步骤开始 + 通过）
         step_total = sum(len(case.steps) for _, case in pairs)
-        assert step_total == 26
+        assert step_total == 38  # 26 + 006/015/022/023 各补 3 步登录
         suite_total = len(dict.fromkeys(m.module_name for m, _ in pairs))
         assert s.execute(text("SELECT COUNT(*) FROM tb_execution_log")).scalar_one() \
             == suite_total + 2 * step_total
@@ -265,6 +265,7 @@ def test_framework_failed_case_records_real_engine_error(db):
 
     failed = [r for r in get_batch_results(db, recorder.batch_id)
               if r.exec_status == "FAILED"]
-    assert {r.case_code for r in failed} == {"001", "005"}  # 两条登录用例点击 #loginbtn
+    # 006+ 已补登录前置步骤：缺失 #loginbtn 时所有勾选用例都会在登录步失败
+    assert {r.case_code for r in failed} == set(CHECKED)
     assert all("元素未找到" in r.error_message for r in failed)
     assert media["saved"].endswith(".png")

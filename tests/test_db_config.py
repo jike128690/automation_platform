@@ -28,7 +28,7 @@ def db(tmp_path):
 # ---------------------------------------------------------------- 建表
 
 def test_config_table_created(db):
-    assert current_version(db) == 3
+    assert current_version(db) >= 3  # v003 起建 tb_system_config（后续脚本可继续升级）
     with db.connect() as c:
         cols = c.exec_driver_sql("PRAGMA table_info(tb_system_config)").fetchall()
     names = {col[1] for col in cols}

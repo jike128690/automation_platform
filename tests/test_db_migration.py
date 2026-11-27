@@ -107,6 +107,64 @@ def test_upgrade_replay_applies_new_script_only(engine, monkeypatch, tmp_path):
     assert init_db(engine) == []
 
 
+# ---------------------------------------------------------------- v004 登录前置步骤
+
+def test_v004_adds_login_steps_to_existing_cases(engine):
+    """存量库升级：006 用例由 [goto, click, assert] 补成 [goto, 登录3步, click, assert]。"""
+    from app.db.migrations import v004_login_prereq_steps as v4
+    from app.db.seed import seed_db
+
+    init_db(engine)
+    seed_db(engine)
+
+    with engine.connect() as connection:
+        raw = connection.connection
+        case_id = raw.execute(
+            "SELECT case_id FROM tb_test_case WHERE case_code = '006'"
+        ).fetchone()[0]
+        # 还原为 v004 之前的步骤定义（goto + 点击预览 + 断言）
+        raw.execute("DELETE FROM tb_test_step WHERE case_id = ?", (case_id,))
+        raw.executemany(
+            "INSERT INTO tb_test_step (step_id, case_id, step_order, "
+            "command_type, element_id, target_override, param_value, is_secret, "
+            "timeout_sec, remark, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, NULL, ?, ?, ?)",
+            [
+                (f"old-1-{case_id}", case_id, 1, "GOTO_URL",
+                 "https://192.168.3.102/", "打开主框架", "2026-01-01T00:00:00.000",
+                 "2026-01-01T00:00:00.000"),
+                (f"old-2-{case_id}", case_id, 2, "CLICK_ELEMENT",
+                 "//a[normalize-space()='预览']", "点击导航 [预览]",
+                 "2026-01-01T00:00:00.000", "2026-01-01T00:00:00.000"),
+                (f"old-3-{case_id}", case_id, 3, "ASSERT_ELEMENT_VISIBLE",
+                 "#playbackarea", "断言播放画面区域可见",
+                 "2026-01-01T00:00:00.000", "2026-01-01T00:00:00.000"),
+            ],
+        )
+        raw.commit()
+
+        v4.upgrade(raw)
+        rows = raw.execute(
+            "SELECT step_order, command_type, is_secret FROM tb_test_step "
+            "WHERE case_id = ? ORDER BY step_order",
+            (case_id,),
+        ).fetchall()
+        assert [r[0] for r in rows] == [1, 2, 3, 4, 5, 6]
+        assert [r[1] for r in rows] == [
+            "GOTO_URL", "INPUT_TEXT", "INPUT_TEXT", "CLICK_ELEMENT",
+            "CLICK_ELEMENT", "ASSERT_ELEMENT_VISIBLE",
+        ]
+        assert rows[2][2] == 1  # 密码步骤 is_secret=1
+
+        # 幂等：再次执行不重复插入
+        v4.upgrade(raw)
+        count = raw.execute(
+            "SELECT COUNT(*) FROM tb_test_step WHERE case_id = ?", (case_id,)
+        ).fetchone()[0]
+        assert count == 6
+        raw.rollback()
+
+
 # ---------------------------------------------------------------- 防篡改
 
 def test_tampered_executed_script_rejected(engine, monkeypatch):

@@ -159,6 +159,22 @@ def test_seed_step_orders_continuous_per_case(session):
         assert orders == list(range(1, len(orders) + 1))
 
 
+def test_dependent_cases_include_login_steps(session):
+    """006–023 依赖登录态：goto 之后自带登录步骤（设备登录态不跨 goto 保留）。"""
+    cases = session.scalars(
+        select(TestCase).where(TestCase.case_code >= "006")
+    ).all()
+    assert cases
+    for case in cases:
+        commands = [s.command_type for s in case.steps]
+        assert commands[:4] == [
+            "GOTO_URL", "INPUT_TEXT", "INPUT_TEXT", "CLICK_ELEMENT",
+        ], case.case_code
+        assert case.steps[1].param_value == "admin"
+        assert case.steps[2].is_secret == 1
+        assert case.steps[3].element_id is not None  # 登录按钮已入库
+
+
 # ---------------------------------------------------------------- 确认项 6：接口表为空
 
 def test_seed_interface_table_empty(session):

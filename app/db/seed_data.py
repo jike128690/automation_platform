@@ -204,6 +204,15 @@ def _assert_x(xpath: str, remark: str, timeout: int = 5) -> tuple:
     return ("assert_visible", None, xpath, "", remark, 0, timeout)
 
 
+def _login_steps() -> list[tuple]:
+    """设备登录态只存于页面内存（重新 goto 即掉线），依赖登录的用例须自行登录。"""
+    return [
+        _fill(E_USERNAME, ADMIN_USER, '输入账号 "admin"'),
+        _fill(E_PASSWORD, ADMIN_PWD, '输入密码 "admin"', secret=1),
+        _click(E_LOGIN_BTN, "点击 [登录] 按钮"),
+    ]
+
+
 SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
     (
         "M01", "[模块一] 登录与基础功能", [
@@ -252,12 +261,14 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("006", "进入实时预览视图测试", "进入预览测试", 1,
                  "导航进入预览后播放画面可见（依赖登录态）", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _assert(E_PLAYER_SCREEN, "断言播放画面区域可见"),
                  ]),
                 ("007", "左侧栏开合测试", "左侧栏测试", 0,
                  "左侧栏可展开并收起", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_OPEN_LEFT, "展开左侧栏"),
                      _click(E_CLOSE_LEFT, "收起左侧栏"),
@@ -265,6 +276,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("008", "画面尺寸切换测试", "尺寸切换测试", 0,
                  "适应窗口/默认/原始三种尺寸可切换", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_FIT_WINDOW, "切换 [适应窗口]"),
                      _click(E_DEFAULT_SCALE, "切换 [默认尺寸]"),
@@ -273,6 +285,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("009", "主辅码流切换测试", "码流切换测试", 0,
                  "主码流/辅码流可切换", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_MAIN_STREAM, "切换 [主码流]"),
                      _click(E_SUB_STREAM, "切换 [辅码流]"),
@@ -280,30 +293,35 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("010", "声音开关测试", "声音开关测试", 0,
                  "声音可开启/关闭", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_VOICE, "点击 [声音] 开关"),
                  ]),
                 ("011", "手动录像测试", "手动录像测试", 0,
                  "手动录像可触发", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_RECORD, "点击 [录像] 按钮"),
                  ]),
                 ("012", "抓图功能测试", "抓图测试", 0,
                  "抓图可触发", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_SNAP, "点击 [抓图] 按钮"),
                  ]),
                 ("013", "全屏播放测试", "全屏测试", 0,
                  "进入全屏播放", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_FULLSCREEN, "点击 [全屏] 按钮"),
                  ]),
                 ("014", "电子放大测试", "电子放大测试", 0,
                  "局部放大功能可触发", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_ELECZOOM, "点击 [电子放大] 按钮"),
                  ]),
@@ -316,6 +334,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("015", "云台八方向控制测试", "云台方向测试", 1,
                  "上/右上/右/右下/下/左下/左/左上 8 个方向键均可点击", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_PTZ_UP, "云台 [上]"),
                      _click(E_PTZ_RIGHT_UP, "云台 [右上]"),
@@ -329,6 +348,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("016", "云台变倍测试", "云台变倍测试", 0,
                  "变倍放大/缩小可操作", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click_x(X_TAB_ZOOM, "点击 [变倍] 页签"),
                      _click(E_ZOOM_ADD, "点击 [变倍放大]"),
@@ -337,6 +357,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("017", "云台聚焦测试", "云台聚焦测试", 0,
                  "聚焦近焦/远焦可操作", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_FOCUS_LBL, "点击 [聚焦] 页签"),
                      _click(E_FOCUS_ADD, "点击 [近焦]"),
@@ -345,6 +366,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("018", "云台光圈测试", "云台光圈测试", 0,
                  "光圈增大/减小可操作", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click_x(X_TAB_IRIS, "点击 [光圈] 页签"),
                      _click(E_IRIS_ADD, "点击 [光圈增大]"),
@@ -353,6 +375,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("019", "云台速度面板测试", "云台速度测试", 0,
                  "速度面板打开且速度值显示可见", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click(E_PTZ_SPEED, "点击 [速度] 打开速度面板"),
                      _assert(E_SLIDER_VAL, "断言云台速度值可见"),
@@ -360,6 +383,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("020", "扩展功能面板测试", "扩展功能测试", 0,
                  "扩展功能页签打开后 3D 定位图标可见", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click_x(X_TAB_EXTEND, "点击 [扩展功能] 页签"),
                      _assert(E_ICON_3D, "断言 3D 定位图标可见"),
@@ -367,6 +391,7 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("021", "预置位设置测试", "预置位测试", 0,
                  "预置位 1 可设置", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click_x(X_NAV_PREVIEW, '点击导航 [预览]'),
                      _click_x(X_LINK_PRESET, "点击 [预置位:] 链接"),
                      _fill(E_PREPOINT, "1", '输入预置位编号 "1"'),
@@ -381,11 +406,13 @@ SEED_MODULES: list[tuple[str, str, list[tuple[str, list[tuple]]]]] = [
                 ("022", "进入录像回放视图测试", "进入回放测试", 1,
                  "点击回放导航后进入回放视图（依赖登录态）", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click(E_PLAYBACK_NAV, "点击 [回放] 导航按钮"),
                  ]),
                 ("023", "进入系统设置视图测试", "进入设置测试", 1,
                  "点击设置导航后进入设置视图（依赖登录态）", [
                      _goto(SITE_URL, "打开主框架"),
+                     *_login_steps(),
                      _click(E_SETUP_NAV, "点击 [设置] 导航按钮"),
                  ]),
             ]),
