@@ -226,7 +226,12 @@ class WorkerThread(QThread):
             kwargs["channel"] = self._browser_channel
         self._browser = await self._playwright.chromium.launch(**kwargs)
         self._browser_process = getattr(self._browser, "process", None)  # Popen 或 None
-        page_kwargs = {"viewport": {"width": self._viewport[0], "height": self._viewport[1]}}
+        page_kwargs = {
+            "viewport": {"width": self._viewport[0], "height": self._viewport[1]},
+            # 设备站点常用自签/过期证书（如 192.168.3.102 的 mkcert 证书），
+            # 不忽略会停在 chrome-error://chromewebdata 拦截页（ERR_CERT_AUTHORITY_INVALID）
+            "ignore_https_errors": True,
+        }
         if self._record_video and self._video_dir:  # T12.3：录制执行过程（配置开关）
             # 录制参数属于浏览器上下文，只能随 new_page 传入（launch 不接受）
             Path(self._video_dir).mkdir(parents=True, exist_ok=True)

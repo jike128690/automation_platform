@@ -172,6 +172,7 @@ def test_record_video_options_passed_to_page_context(qapp, monkeypatch, tmp_path
     assert starter.playwright.chromium.launch_kwargs == {"headless": True, "channel": "chrome"}
     assert browser.page_kwargs == {
         "viewport": {"width": 1280, "height": 800},
+        "ignore_https_errors": True,
         "record_video_dir": str(video_dir),
         "record_video_size": {"width": 1280, "height": 800},
     }
@@ -189,7 +190,10 @@ def test_record_video_disabled_keeps_page_options_clean(qapp, monkeypatch):
 
     browser = starter.playwright.chromium.browser
     assert starter.playwright.chromium.launch_kwargs == {"headless": True}
-    assert browser.page_kwargs == {"viewport": {"width": 1280, "height": 800}}
+    assert browser.page_kwargs == {
+        "viewport": {"width": 1280, "height": 800},
+        "ignore_https_errors": True,  # 自签/过期证书站点不再停在隐私错误拦截页
+    }
 
 
 def test_worker_without_queue_finishes_immediately(qapp):
