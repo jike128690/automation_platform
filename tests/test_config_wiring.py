@@ -220,6 +220,7 @@ def test_worker_options_come_from_config(window):
     assert kwargs["start_delay_sec"] == 2        # LDM 2.10 默认值
     assert kwargs["wait_until"] == "load"        # NORMAL → load
     assert kwargs["implicit_wait_ms"] == 5000    # 5s * 1000
+    assert kwargs["exec_timeout_ms"] == 30000    # 30s * 1000（导航超时独立于隐式等待）
     assert kwargs["retry_count"] == 2
     assert kwargs["screenshot_on_fail"] is True
     assert kwargs["record_video"] is True
@@ -233,6 +234,7 @@ def test_config_change_applies_on_next_run(window):
         "browser_type": "CHROMIUM",
         "start_delay_sec": 7,
         "page_load_strategy": "EAGER",
+        "exec_timeout_sec": 60,
         "retry_count": 5,
         "log_level": "WARN",
         "screenshot_on_fail": 0,
@@ -244,6 +246,7 @@ def test_config_change_applies_on_next_run(window):
     kwargs = worker.set_runtime_options.call_args.kwargs
     assert kwargs["start_delay_sec"] == 7
     assert kwargs["wait_until"] == "domcontentloaded"  # EAGER 映射
+    assert kwargs["exec_timeout_ms"] == 60000
     assert kwargs["retry_count"] == 5
     assert kwargs["screenshot_on_fail"] is False
     assert kwargs["record_video"] is False
@@ -297,3 +300,28 @@ def test_media_dirs_follow_report_save_path(window):
     assert Path(screenshot_dir).is_dir() and Path(video_dir).is_dir()
     assert Path(screenshot_dir).name == "screenshots"
     assert Path(video_dir).name == "videos"
+
+
+# ---------------------------------------------------------------- 导航超时与隐式等待分离
+
+class FakeTimeoutPage:
+    """只记录 Playwright 超时设置的假页面。"""
+
+    def __init__(self):
+        self.default_timeout = None
+        self.navigation_timeout = None
+
+    def set_default_timeout(self, ms):
+        self.default_timeout = ms
+
+    def set_default_navigation_timeout(self, ms):
+        self.navigation_timeout = ms
+
+
+def test_goto_timeout_uses_exec_timeout_not_implicit_wait():
+    """回归：设备站点加载慢时，goto 不应被 5s 隐式等待卡死。"""
+    from app.engine.executor import AsyncPlaywrightActions
+    page = FakeTimeoutPage()
+    AsyncPlaywrightActions(page, implicit_wait_ms=5000, exec_timeout_ms=30000)
+    assert page.default_timeout == 5000
+    assert page.navigation_timeout == 30000

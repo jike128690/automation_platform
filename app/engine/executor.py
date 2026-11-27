@@ -62,13 +62,15 @@ class AsyncPlaywrightActions:
 
     T12.3 配置联动：
     - wait_until 由页面加载策略映射（NORMAL→load / EAGER→domcontentloaded / NONE→commit）；
-    - implicit_wait_sec → page.set_default_timeout（Playwright 原生自动等待的最近似对应）；
+    - implicit_wait_sec → page.set_default_timeout（元素等待）；
+    - exec_timeout_sec → page.set_default_navigation_timeout（导航等待，独立于元素等待）；
     - clear_cookies/clear_history/clear_cache 按【批量配置】开关在用例开始前清理；
     - screenshot_on_fail 启用时 capture_failure_screenshot 保存报错截图。
     """
 
     def __init__(self, page, wait_until: str = "domcontentloaded",
                  implicit_wait_ms: int | None = None,
+                 exec_timeout_ms: int | None = None,
                  clear_cookies: bool = False, clear_history: bool = False,
                  clear_cache: bool = False,
                  screenshot_dir: str | None = None,
@@ -83,6 +85,10 @@ class AsyncPlaywrightActions:
         if implicit_wait_ms is not None:
             # 元素查找等待 (Implicit Wait)：Playwright 以默认超时近似对应（图4）
             page.set_default_timeout(implicit_wait_ms)
+        if exec_timeout_ms is not None:
+            # 导航超时必须单独设置：否则会回落到元素默认超时（5s），
+            # 设备站点首次加载（含大量资源）会被误判为超时
+            page.set_default_navigation_timeout(exec_timeout_ms)
 
     async def goto(self, url: str):
         await self.page.goto(url, wait_until=self.wait_until)
@@ -226,7 +232,10 @@ class AsyncExecutor:
                 # 步骤抛异常（元素未找到/超时/断言失败）视为用例失败，附异常原因
                 logger.exception(f"用例 {case.case_id} {case.short_name} 步骤执行异常")
                 self._on_highlight({}, "")  # 异常路径同样清除画布叠加层（空 dict=清除）
-                self._log(f"[{case.case_id}] {case.short_name}: {step.remark}... 失败: {exc}")
+                message = f"[{case.case_id}] {case.short_name}: {step.remark}... 失败: {exc}"
+                if step.action_type == "goto" and "Timeout" in str(exc):
+                    message += "（可调大【测试执行超时】或将【页面加载策略】改为 EAGER）"
+                self._log(message)
                 # T12.3 失败自动截图：路径经 on_media 回调落库（screenshot_path）
                 await self._capture_failure_media(case.case_id)
                 self._on_status(case.case_id, STATUS_FAILED)

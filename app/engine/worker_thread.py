@@ -92,6 +92,7 @@ class WorkerThread(QThread):
         self._start_delay_sec = 0
         self._wait_until = "domcontentloaded"
         self._implicit_wait_ms = None
+        self._exec_timeout_ms = None
         self._retry_count = 0
         self._screenshot_on_fail = False
         self._screenshot_dir = None
@@ -126,6 +127,7 @@ class WorkerThread(QThread):
     def set_runtime_options(self, start_delay_sec: int = 0,
                             wait_until: str = "domcontentloaded",
                             implicit_wait_ms: int | None = None,
+                            exec_timeout_ms: int | None = None,
                             retry_count: int = 0,
                             screenshot_on_fail: bool = False,
                             screenshot_dir: str | None = None,
@@ -142,6 +144,7 @@ class WorkerThread(QThread):
         self._start_delay_sec = max(0, int(start_delay_sec))
         self._wait_until = wait_until
         self._implicit_wait_ms = implicit_wait_ms
+        self._exec_timeout_ms = exec_timeout_ms
         self._retry_count = retry_count
         self._screenshot_on_fail = screenshot_on_fail
         self._screenshot_dir = screenshot_dir
@@ -194,6 +197,7 @@ class WorkerThread(QThread):
                     self._page,
                     wait_until=self._wait_until,
                     implicit_wait_ms=self._implicit_wait_ms,
+                    exec_timeout_ms=self._exec_timeout_ms,
                     clear_cache=self._clear_cache,
                     clear_cookies=self._clear_cookies,
                     clear_history=self._clear_history,

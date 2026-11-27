@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
             start_delay_sec=config.start_delay_sec,
             wait_until=WAIT_UNTIL_MAP[config.page_load_strategy],
             implicit_wait_ms=config.implicit_wait_sec * 1000,
+            exec_timeout_ms=config.exec_timeout_sec * 1000,
             retry_count=config.retry_count,
             screenshot_on_fail=bool(config.screenshot_on_fail),
             screenshot_dir=screenshot_dir,
