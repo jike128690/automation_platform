@@ -165,6 +165,34 @@ def test_v004_adds_login_steps_to_existing_cases(engine):
         raw.rollback()
 
 
+# ---------------------------------------------------------------- v005 站点地址
+
+def test_v005_adds_site_url_column_idempotent(engine):
+    """存量库补 site_url 列；重复执行不报错。"""
+    from app.config import DEFAULT_SITE_URL
+    from app.db.migrations import v005_site_url as v5
+
+    with engine.connect() as connection:
+        raw = connection.connection
+        raw.execute("CREATE TABLE tb_system_config (config_id TEXT(36) PRIMARY KEY)")
+        raw.commit()
+        assert "site_url" not in {
+            r[1] for r in raw.execute("PRAGMA table_info(tb_system_config)")
+        }
+
+        v5.upgrade(raw)
+        columns = {r[1] for r in raw.execute("PRAGMA table_info(tb_system_config)")}
+        assert "site_url" in columns
+        default = raw.execute(
+            "SELECT dflt_value FROM pragma_table_info('tb_system_config') "
+            "WHERE name = 'site_url'"
+        ).fetchone()[0]
+        assert DEFAULT_SITE_URL in default
+
+        v5.upgrade(raw)  # 幂等：不重复 ALTER
+        raw.rollback()
+
+
 # ---------------------------------------------------------------- 防篡改
 
 def test_tampered_executed_script_rejected(engine, monkeypatch):

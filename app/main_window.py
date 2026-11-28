@@ -21,6 +21,7 @@ from app.db.seed import seed_db
 from app.db.services.batch_recorder import BatchRecorder
 from app.db.services.config_service import WAIT_UNTIL_MAP, get_config
 from app.db.services.history_service import cleanup_expired_media
+from app.engine.url_rebase import apply_site_url
 from app.engine.worker_thread import WorkerThread
 from app.pages.batch_config_page import BatchConfigPage
 from app.pages.home_page import HomePage
@@ -97,10 +98,14 @@ class MainWindow(QMainWindow):
 
     def _on_run_clicked(self):
         """启动批次：校验勾选 → 清空/初始化面板 → 锁定互斥 → 启动 WorkerThread。"""
+        # 配置在本次运行开始时读取（T12.3：修改配置后重新运行即生效）
+        config = get_config(self._db_engine)
         pairs = self.home_page.case_tree.selected_pairs()
         if not pairs:
             QMessageBox.information(self, "提示", EMPTY_QUEUE_MSG)
             return
+        # 被测站点地址来自配置页：只改写内存 DTO 的 goto origin，不动数据库资产
+        apply_site_url(pairs, config.site_url)
         # 新一轮清空日志与状态队列（5.1.6 清空策略 / 5.1.5）
         self.home_page.log_panel.clear_log()
         self.home_page.status_panel.load_queue(pairs)
@@ -113,8 +118,6 @@ class MainWindow(QMainWindow):
         self.btn_stop.setText("□ 停止测试")
         self._set_secondary_enabled(False)
         # 工作线程全链路：浏览器 + 队列 + 信号直连面板
-        # T12.3：启动参数来自 tb_system_config（修改配置后重新运行即生效）
-        config = get_config(self._db_engine)
         worker = WorkerThread()
         # 浏览器内核选择（图4）：CHROME → env_check 探测的本机内核；
         # CHROMIUM → Playwright 内置内核（用户显式选择，覆盖探测结果）

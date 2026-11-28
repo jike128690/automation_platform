@@ -39,7 +39,9 @@ r"""真实业务种子数据（转录自 D:\WebAutomation\pages 视频监控系�
 """
 from __future__ import annotations
 
-SITE_URL = "https://192.168.3.102/"
+from app.config import DEFAULT_SITE_URL
+
+SITE_URL = DEFAULT_SITE_URL  # 种子默认站点；运行期以配置页 site_url 为准（url_rebase）
 
 ADMIN_USER = "admin"
 ADMIN_PWD = "admin"

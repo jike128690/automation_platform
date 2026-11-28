@@ -263,6 +263,7 @@ def test_batch_config_page_roundtrip(window, no_dialogs):
     page = window.batch_config_page
     page.refresh()
     page.project_name.setText("联动测试项目")
+    page.site_url.setText("https://192.168.3.150/")
     page.browser_type.setCurrentText("CHROMIUM")
     updates = page.collect_updates()
     assert page.validate(updates) is None  # 校验通过
@@ -270,6 +271,7 @@ def test_batch_config_page_roundtrip(window, no_dialogs):
 
     config = get_config(window._db_engine)
     assert config.project_name == "联动测试项目"
+    assert config.site_url == "https://192.168.3.150/"
     assert config.browser_type == "CHROMIUM"
     assert no_dialogs["information"]      # 保存成功提示已弹出（非阻塞）
     assert not no_dialogs["warning"]
@@ -291,6 +293,43 @@ def test_batch_config_page_validation(window, no_dialogs):
     config = get_config(window._db_engine)
     assert config.proxy_mode == "CUSTOM"
     assert config.proxy_address == "http://192.168.1.1:8080"
+
+
+def test_batch_config_page_site_url_validation(window, no_dialogs):
+    """被测站点地址校验：空值/非法格式阻断保存，合法地址可保存。"""
+    page = window.batch_config_page
+    page.refresh()
+
+    page.site_url.setText("")
+    page._on_save()
+    assert no_dialogs["warning"] and "被测站点地址不能为空" in no_dialogs["warning"][0]
+
+    page.site_url.setText("192.168.3.150")
+    page._on_save()
+    assert "被测站点地址格式错误" in no_dialogs["warning"][-1]
+
+    page.site_url.setText("http://192.168.3.150:8080/")
+    page._on_save()
+    assert get_config(window._db_engine).site_url == "http://192.168.3.150:8080/"
+
+
+def test_run_rewrites_goto_origin_from_site_url(window):
+    """配置页改 IP 后，运行期把用例 goto 的 origin 统一替换（不改数据库资产）。"""
+    save_config(window._db_engine, {"site_url": "https://10.0.0.9/"})
+    window._on_run_clicked()
+
+    pairs = window._worker.set_queue.call_args.args[0]
+    gotos = [s.selector for _, case in pairs for s in case.steps
+             if s.action_type == "goto"]
+    assert gotos
+    assert all(url.startswith("https://10.0.0.9/") for url in gotos)
+
+    # 数据库中的步骤仍保持原地址（只改内存 DTO）
+    from app.db.repositories.case_repo import load_tree
+    tree = load_tree(window._db_engine)
+    db_gotos = [s.selector for m in tree for c in m.cases for s in c.steps
+                if s.action_type == "goto"]
+    assert all(url.startswith("https://192.168.3.102/") for url in db_gotos)
 
 
 def test_media_dirs_follow_report_save_path(window):

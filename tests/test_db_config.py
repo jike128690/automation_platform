@@ -34,7 +34,7 @@ def test_config_table_created(db):
     names = {col[1] for col in cols}
     # LDM 2.10 全字段逐项对应
     assert {
-        "config_id", "project_name", "report_save_path", "run_mode",
+        "config_id", "project_name", "site_url", "report_save_path", "run_mode",
         "start_delay_sec", "browser_type", "driver_path", "exec_timeout_sec",
         "implicit_wait_sec", "page_load_strategy", "proxy_mode",
         "proxy_address", "proxy_auth_enabled", "proxy_username",
@@ -48,8 +48,10 @@ def test_config_table_created(db):
 # ---------------------------------------------------------------- 单例读写
 
 def test_get_config_initializes_defaults(db):
+    from app.config import DEFAULT_SITE_URL
     config = get_config(db)
     assert config.project_name == "我的Web自动化测试"
+    assert config.site_url == DEFAULT_SITE_URL
     assert config.run_mode == "TEST"
     assert config.browser_type == "CHROME"
     assert config.page_load_strategy == "NORMAL"
@@ -68,6 +70,7 @@ def test_save_then_read_back_consistent(db):
     get_config(db)  # 先初始化
     saved = save_config(db, {
         "project_name": "视频监控回归测试",
+        "site_url": "https://192.168.3.150/",
         "browser_type": "CHROMIUM",
         "exec_timeout_sec": 60,
         "proxy_mode": "CUSTOM",
@@ -77,6 +80,7 @@ def test_save_then_read_back_consistent(db):
         "log_level": "ERROR",
     })
     assert saved.browser_type == "CHROMIUM"
+    assert saved.site_url == "https://192.168.3.150/"
     assert saved.exec_timeout_sec == 60
     assert saved.proxy_address == "http://192.168.1.1:8080"
     assert saved.proxy_password == "s3cret"

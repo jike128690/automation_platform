@@ -17,6 +17,7 @@ import enum
 from sqlalchemy import CheckConstraint, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import DEFAULT_SITE_URL
 from app.db.base import Base, gen_uuid, now_iso
 
 __all__ = ["SystemConfig", "RunMode", "BrowserType", "PageLoadStrategy",
@@ -74,6 +75,9 @@ class SystemConfig(Base):
     # ---- 常规设置（图3） ----
     project_name: Mapped[str] = mapped_column(
         Text(100), nullable=False, default="我的Web自动化测试",
+    )
+    site_url: Mapped[str] = mapped_column(
+        Text(255), nullable=False, default=DEFAULT_SITE_URL,
     )
     report_save_path: Mapped[str] = mapped_column(
         Text(500), nullable=False, default=r"C:\TestReports\HTML",

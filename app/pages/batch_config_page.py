@@ -21,9 +21,11 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import PrimaryPushButton
 
+from app.config import DEFAULT_SITE_URL
 from app.db.services.config_service import get_config, save_config
 
 _PROXY_RE = re.compile(r"^https?://[^\s:]+:\d{1,5}$")
+_SITE_URL_RE = re.compile(r"^https?://[^\s/]+/?$")
 RETENTION_OPTIONS = [(1, "1 天"), (3, "3 天"), (5, "5 天"), (7, "7 天"),
                      (30, "30 天"), (-1, "永久保留")]
 
@@ -47,12 +49,16 @@ class BatchConfigPage(QWidget):
         form1 = QFormLayout(general)
         self.project_name = QLineEdit(self)
         self.project_name.setMaxLength(100)
+        self.site_url = QLineEdit(self)
+        self.site_url.setMaxLength(255)
+        self.site_url.setPlaceholderText(DEFAULT_SITE_URL)
         self.report_save_path = QLineEdit(self)
         self.run_mode = QComboBox(self)
         self.run_mode.addItems(["TEST", "DEBUG"])  # TEST 按需重跑 / DEBUG 单步暂停
         self.start_delay_sec = QSpinBox(self)
         self.start_delay_sec.setRange(0, 60)
         form1.addRow("测试项目名称", self.project_name)
+        form1.addRow("被测站点地址", self.site_url)
         form1.addRow("测试报告保存路径", self.report_save_path)
         form1.addRow("运行模式", self.run_mode)
         form1.addRow("测试启动前延迟(秒)", self.start_delay_sec)
@@ -155,6 +161,7 @@ class BatchConfigPage(QWidget):
         """从 tb_system_config 装载当前配置到表单（进入页面时调用）。"""
         config = get_config(self._db_engine)
         self.project_name.setText(config.project_name)
+        self.site_url.setText(config.site_url)
         self.report_save_path.setText(config.report_save_path)
         self.run_mode.setCurrentText(config.run_mode)
         self.start_delay_sec.setValue(config.start_delay_sec)
@@ -192,6 +199,7 @@ class BatchConfigPage(QWidget):
         retention = RETENTION_OPTIONS[self.media_retention_days.currentIndex()][0]
         updates = {
             "project_name": self.project_name.text().strip(),
+            "site_url": self.site_url.text().strip(),
             "report_save_path": self.report_save_path.text().strip(),
             "run_mode": self.run_mode.currentText(),
             "start_delay_sec": self.start_delay_sec.value(),
@@ -226,6 +234,10 @@ class BatchConfigPage(QWidget):
         """保存校验（路径/代理格式）；通过返回 None，失败返回提示文案。"""
         if not updates["project_name"]:
             return "测试项目名称不能为空"
+        if not updates["site_url"]:
+            return "被测站点地址不能为空"
+        if not _SITE_URL_RE.match(updates["site_url"]):
+            return "被测站点地址格式错误，应为 http://ip[:port] 或 https://ip[:port]"
         if not updates["report_save_path"]:
             return "测试报告保存路径不能为空"
         if updates["proxy_mode"] == "CUSTOM":
